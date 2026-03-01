@@ -1,0 +1,11 @@
+# Ignore virtual environments, caches, and local dev files
+backend/venv/
+frontend/node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.gitignore
+*.md
+skills/

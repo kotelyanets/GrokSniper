@@ -1,0 +1,73 @@
+# ============================================================
+# GrokSniper AI - .gitignore
+# ============================================================
+
+# ---------------------- Environment / Secrets ----------------
+.env
+.env.local
+.env.*.local
+
+# ---------------------- Python -------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ---------------------- Virtual Environments -----------------
+venv/
+.venv/
+env/
+backend/venv/
+
+# ---------------------- Node / Frontend ----------------------
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+.next/
+
+# ---------------------- Database -----------------------------
+*.db
+*.sqlite3
+*.sqlite
+
+# ---------------------- Docker -------------------------------
+docker-compose.override.yml
+
+# ---------------------- OS / IDE -----------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+
+# ---------------------- Logs ---------------------------------
+*.log
+logs/
+
+# ---------------------- External / Agent ----------------------
+skills/
+.gemini/
+.agents/
+.agent/
+
+# ---------------------- Misc ---------------------------------
+*.bak
+*.tmp
+.cache/
+*.parquet

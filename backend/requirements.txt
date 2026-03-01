@@ -1,0 +1,35 @@
+# Database
+sqlalchemy[asyncio]==2.0.38
+asyncpg==0.30.0
+
+# Config & Validation
+python-dotenv==1.0.1
+pydantic==2.10.6
+
+# Async HTTP (Grok / exchange API calls)
+httpx==0.28.1
+
+# Crypto exchange connectivity (conditionally imported; safe to omit in mock mode)
+ccxt==4.4.24
+feedparser==6.0.11
+
+# API Server
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+
+# ML / Predictive Analytics
+scikit-learn==1.6.1
+joblib==1.4.2
+
+# Backtesting / Technical Analysis
+pandas>=2.2.0
+pandas_ta>=0.3.14b
+
+# Real-time WebSocket streaming
+websockets>=12.0
+
+# Agent Framework (CrewAI + Anthropic Claude)
+crewai>=0.80.0
+crewai-tools>=0.17.0
+langchain-anthropic>=0.3.0
+json-repair>=0.30.0
