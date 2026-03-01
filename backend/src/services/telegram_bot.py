@@ -17,10 +17,11 @@ def escape_html(text: str) -> str:
         return ""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-async def send_telegram_message(text: str, parse_mode: str = "HTML") -> None:
+async def send_telegram_message(text: str, parse_mode: str = "HTML", reply_markup: dict = None) -> None:
     """
     Sends a message to all Telegram chats configured in TELEGRAM_CHAT_ID.
     Defaults to HTML parse mode for Premium Institutional formatting.
+    Accepts optional reply_markup dict for inline keyboards.
     """
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_ids_str = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -45,6 +46,9 @@ async def send_telegram_message(text: str, parse_mode: str = "HTML") -> None:
                 "parse_mode": parse_mode,
                 "disable_web_page_preview": True  # Keep chat clean
             }
+            if reply_markup is not None:
+                payload["reply_markup"] = reply_markup
+                
             try:
                 response = await client.post(url, json=payload, timeout=10.0)
                 response.raise_for_status()
@@ -95,7 +99,8 @@ async def send_entry_alert(
         f"• <b>Цена входа:</b> {price:,.4f} USDT\n"
         f"• <b>Объем сделки:</b> ${size:,.2f}\n"
         f"• <b>Динамический Стоп (ATR):</b> {stop_loss:,.4f} USDT\n\n"
-        f"📊 <a href=\"{tv_link}\">Открыть график TradingView</a>"
+        f"📊 <a href=\"{tv_link}\">Открыть график TradingView</a>\n\n"
+        f"#{ticker.upper()} #{direction_str.replace('🟢 ', '').replace('🔴 ', '')} #ВХОД"
     )
     await send_telegram_message(msg)
 
@@ -129,6 +134,7 @@ async def send_exit_alert(
         f"• <b>Цена входа:</b> {entry_price:,.4f} USDT\n"
         f"• <b>{ref_label}:</b> {reference_price:,.4f} USDT\n\n"
         f"💵 <b>Ожидаемый P&L:</b> <b>{pnl_pct:+.2f}%</b> (${pnl_usd:+.2f})\n\n"
-        f"📊 <a href=\"{tv_link}\">Открыть график TradingView</a>"
+        f"📊 <a href=\"{tv_link}\">Открыть график TradingView</a>\n\n"
+        f"#{ticker.upper()} #{side_str} #ВЫХОД"
     )
     await send_telegram_message(msg)

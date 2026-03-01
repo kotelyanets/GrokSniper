@@ -139,9 +139,20 @@ async def _portfolio_summary_loop() -> None:
                 f"<b>Общий капитал:</b> ${total_usdt:,.2f}\n"
                 f"<b>Сделок за 24ч:</b> {trades_24h}\n"
                 f"<b>Открытые позиции:</b>\n{positions_text}\n"
-                f"⏰ Следующая сводка через {INTERVAL // 3600}ч"
+                f"⏰ Следующая сводка через {INTERVAL // 3600}ч\n\n"
+                f"#СВОДКА #ПОРТФЕЛЬ"
             )
-            await send_telegram_message(msg)
+            
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "💼 Управление позициями", "callback_data": "btn_positions"},
+                        {"text": "📊 Текущий статус", "callback_data": "btn_status"}
+                    ]
+                ]
+            }
+            
+            await send_telegram_message(msg, reply_markup=reply_markup)
             logger.info(f"[Summary] Periodic portfolio summary sent. Equity: ${total_usdt:,.2f}")
 
         except Exception as e:
@@ -326,14 +337,15 @@ async def scan_charts_for_opportunities():
             # ── Watchlist Alert: 5 out of 6 passed ─────────────────────────
             if not passed_all and passed_count >= 5:
                 watch_msg = (
-                    f"👀 <b>WATCHLIST: {ticker}</b>\n\n"
+                    f"👀 <b>WATCHLIST: #{ticker}</b>\n\n"
                     f"Прошёл <b>{passed_count}/6</b> фильтров MTF Confluence\n"
-                    f"❌ Не прошёл: {', '.join(failed)}\n\n"
+                    f"❌ Не прошёл: Возможный сбой фильтра\n\n"
                     f"<b>RSI:</b> {rsi:.1f} | <b>Цена:</b> ${current_price:,.2f}\n"
                     f"<b>EMA20:</b> {ema_20:.2f} | <b>EMA50:</b> {ema_50:.2f}\n"
                     f"<b>4h:</b> close={close_4h:.2f} EMA50={ema_50_4h:.2f}\n"
                     f"Объём: {current_volume/volume_sma_20:.2f}x SMA\n\n"
-                    f"⚠️ Близок к сигналу на покупку — следите!"
+                    f"⚠️ Близок к сигналу на покупку — следите!\n\n"
+                    f"#WATCHLIST #{ticker}"
                 )
                 await send_telegram_message(watch_msg)
 
@@ -646,10 +658,11 @@ async def _automation_loop() -> None:
                 emoji = "🚀" if analysis.sentiment_score >= 0.4 else "📉" if analysis.sentiment_score <= -0.4 else "ℹ️"
                 
                 news_msg = (
-                    f"{emoji} <b>АНАЛИЗ НОВОСТЕЙ: {analysis.ticker}</b>\n\n"
+                    f"{emoji} <b>АНАЛИЗ НОВОСТЕЙ: #{analysis.ticker}</b>\n\n"
                     f"<b>Настроение:</b> {sentiment_pct:.0f}% {sentiment_type} (Уверенность: {analysis.confidence}%)\n"
                     f"<b>Мнение ИИ:</b> <i>{analysis.reason}</i>\n\n"
-                    f"<a href=\"{news['url']}\">Оригинал статьи</a>"
+                    f"<a href=\"{news['url']}\">Оригинал статьи</a>\n\n"
+                    f"#{analysis.ticker} #NEWS #SENTIMENT"
                 )
                 await send_telegram_message(news_msg)
 
@@ -719,12 +732,13 @@ async def _automation_loop() -> None:
 
                     # Telegram: Rejected Trade Alert
                     reject_msg = (
-                        f"🚫 <b>СДЕЛКА ОТКЛОНЕНА: {analysis.ticker}</b>\n\n"
+                        f"🚫 <b>СДЕЛКА ОТКЛОНЕНА: #{analysis.ticker}</b>\n\n"
                         f"<b>Причина:</b> {rejection_reason}\n"
                         f"<b>Настроение:</b> {calibrated_score:.2f} (исходное: {raw_score:.2f})\n"
                         f"<b>Уверенность:</b> {analysis.confidence}%\n"
                         f"<b>RSI:</b> {rsi:.1f} | <b>Объём:</b> {current_volume/volume_sma_20:.1f}x SMA\n" if volume_sma_20 > 0 else ""
-                        f"\n<i>Источник: {news['source']}</i>"
+                        f"\n<i>Источник: {news['source']}</i>\n\n"
+                        f"#{analysis.ticker} #REJECTED"
                     )
                     await send_telegram_message(reject_msg)
                 elif is_hype_trade or (is_top_coin and gate_sentiment and gate_volume and gate_btc and ta_approved):
@@ -934,7 +948,8 @@ async def _automation_loop() -> None:
                         msg = (
                             f"🏆 <b>ДОСТИГНУТ РУБЕЖ!</b>\n\n"
                             f"Ваш общий капитал только что превысил <b>${milestone:,.2f}</b>!\n\n"
-                            f"Рекомендуем обновить <code>RESERVE_USDT</code> в файле <code>.env</code>, чтобы зафиксировать прибыль."
+                            f"Рекомендуем обновить <code>RESERVE_USDT</code> в файле <code>.env</code>, чтобы зафиксировать прибыль.\n\n"
+                            f"#MILESTONE #ПРИБЫЛЬ"
                         )
                         await send_telegram_message(msg)
             except Exception as e:
@@ -1033,9 +1048,19 @@ async def lifespan(app: FastAPI):
             f"💰 <b>Баланс:</b> ${total_usdt:,.2f}\n"
             f"📡 <b>Watchlist:</b> {', '.join(WATCHLIST)}\n"
             f"🔧 <b>Стратегия:</b> Institutional Flow | TA/News\n\n"
-            f"Бот полностью активен. Удачной торговли! 🚀"
+            f"Бот полностью активен. Удачной торговли! 🚀\n\n"
+            f"#STARTUP #SYSTEM_ONLINE"
         )
-        await send_telegram_message(startup_msg)
+        
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "📊 Статус", "callback_data": "btn_status"},
+                    {"text": "⏸️ Пауза", "callback_data": "btn_pause"}
+                ]
+            ]
+        }
+        await send_telegram_message(startup_msg, reply_markup=reply_markup)
     except Exception as e:
         logger.warning(f"Startup alert failed: {e}")
 
