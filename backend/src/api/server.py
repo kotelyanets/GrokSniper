@@ -34,6 +34,9 @@ from backend.src.services.exchange import CryptoExchange
 from backend.src.services.telegram_bot import send_telegram_message, send_entry_alert
 from backend.src.ml.predictor import calibrate_score, predict_return
 from backend.src.services.ws_manager import monitor_open_positions_ws, cancel_all_watchers
+import backend.src.config as config
+from backend.src.services.telegram_listener import get_telegram_app, start_telegram_listener, stop_telegram_listener
+
 
 
 logger = logging.getLogger("groksniper.api")
@@ -248,7 +251,11 @@ async def scan_charts_for_opportunities():
     ATR-Based Dynamic Stop Loss:
       stop_loss_distance = ATR(14) * 1.5
     """
+    if config.TRADING_PAUSED:
+        return
+
     try:
+
         for ticker in WATCHLIST:
             update_bot_state(status=f"[MTF TA Scanner] Scanning {ticker}...")
 
@@ -565,6 +572,11 @@ async def _automation_loop() -> None:
 
     while True:
         try:
+            if config.TRADING_PAUSED:
+                update_bot_state(status="⏸️ Paused (Remote Kill Switch)")
+                await asyncio.sleep(15)
+                continue
+
             # 1. Start TA Scanner in background
             ta_task = asyncio.create_task(scan_charts_for_opportunities())
 
@@ -1027,6 +1039,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Startup alert failed: {e}")
 
+    # ── Start Telegram Command Center ───────────────────────────────────
+    tg_app = get_telegram_app()
+    if tg_app:
+        await start_telegram_listener(tg_app)
+
     # Task 1: 60-second RSS + TA scanner loop
     auto_task = asyncio.create_task(_automation_loop())
     logger.info("Automation task started.")
@@ -1059,6 +1076,10 @@ async def lifespan(app: FastAPI):
     ws_task.cancel()
     summary_task.cancel()
     cancel_all_watchers()   # cancel all per-trade watcher sub-tasks
+    
+    if tg_app:
+        await stop_telegram_listener(tg_app)
+        
     for task in [auto_task, ws_task, summary_task]:
         try:
             await task
