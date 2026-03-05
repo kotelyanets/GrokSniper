@@ -29,19 +29,23 @@ venv/
 .venv/
 env/
 backend/venv/
+**/venv/
+**/.venv/
 
 # ---------------------- Node / Frontend ----------------------
-node_modules/
-frontend/node_modules/
+**/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env.local
 .next/
 
-# ---------------------- Database -----------------------------
+# ---------------------- Database / Cache -----------------------------
 *.db
 *.sqlite3
 *.sqlite
+*.pkl
+**/cache_stress_test/
+**/cache_wfv/
 
 # ---------------------- Docker -------------------------------
 docker-compose.override.yml

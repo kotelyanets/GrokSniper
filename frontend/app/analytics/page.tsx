@@ -2,22 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
-    AreaChart,
-    Area,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip as RechartsTooltip,
-    ResponsiveContainer,
-    PieChart,
-    Pie,
-    Cell,
-    BarChart,
-    Bar
+    AreaChart, Area, XAxis, YAxis, CartesianGrid,
+    Tooltip as RechartsTooltip, ResponsiveContainer,
+    PieChart, Pie, Cell, BarChart, Bar
 } from "recharts";
-import { Activity, Target, TrendingUp, AlertCircle, RefreshCw } from "lucide-react";
 
-const API = "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 interface EquityData {
     date: string;
@@ -34,30 +24,74 @@ interface AnalyticsData {
     error?: string;
 }
 
-function StatCard({
-    title,
-    value,
-    sub,
-    icon: Icon,
-    trendColor,
-}: {
-    title: string;
-    value: string;
-    sub: string;
-    icon: React.ElementType;
-    trendColor: string;
-}) {
+// ── Reusable metric card ───────────────────────────────────────────────────
+function MetricCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
     return (
-        <div className={`relative overflow-hidden rounded-2xl border bg-white/5 backdrop-blur-md p-6 flex items-start gap-4 hover:border-white/20 transition-all border-white/10`}>
-            <div className={`absolute -top-8 -left-8 w-32 h-32 ${trendColor} rounded-full blur-2xl opacity-10`} />
-            <div className="flex-shrink-0 w-11 h-11 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
-                <Icon className={`w-5 h-5 ${trendColor.replace("bg-", "text-")}`} />
+        <div style={{
+            background: "var(--bg-card)", border: "1px solid var(--border)",
+            borderRadius: "12px", padding: "20px", position: "relative", overflow: "hidden",
+        }}>
+            <div style={{
+                position: "absolute", top: -20, left: -20, width: "70px", height: "70px",
+                background: color ?? "var(--cyan)", borderRadius: "50%", filter: "blur(24px)", opacity: 0.14,
+                pointerEvents: "none",
+            }} />
+            <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "9px", fontWeight: 500, letterSpacing: "0.18em", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "10px" }}>
+                {label}
+            </p>
+            <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "28px", fontWeight: 700, color: color ?? "var(--text-primary)", letterSpacing: "-0.02em", lineHeight: 1, margin: "0 0 4px" }}>
+                {value}
+            </p>
+            {sub && <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--text-muted)", margin: 0 }}>{sub}</p>}
+        </div>
+    );
+}
+
+// ── Custom recharts tooltip ────────────────────────────────────────────────
+const ChartTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null;
+    return (
+        <div style={{
+            background: "var(--bg-surface)", border: "1px solid var(--border-cyan)",
+            borderRadius: "8px", padding: "10px 14px",
+            fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--text-primary)"
+        }}>
+            <p style={{ color: "var(--text-muted)", marginBottom: "4px" }}>{new Date(label).toLocaleString()}</p>
+            <p style={{ color: "var(--cyan)" }}>PnL: <strong>${payload[0].value?.toFixed(2)}</strong></p>
+        </div>
+    );
+};
+
+// ── Empty state ────────────────────────────────────────────────────────────
+function EmptyState() {
+    return (
+        <div style={{
+            background: "var(--bg-card)", border: "1px solid var(--border)",
+            borderRadius: "12px", padding: "64px 32px", textAlign: "center"
+        }}>
+            {/* Crosshair icon */}
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: "20px" }}>
+                <div style={{
+                    width: "56px", height: "56px", borderRadius: "50%",
+                    background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)",
+                    display: "flex", alignItems: "center", justifyContent: "center"
+                }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" strokeWidth="1.5">
+                        <circle cx="12" cy="12" r="9" />
+                        <circle cx="12" cy="12" r="3" />
+                        <line x1="12" y1="3" x2="12" y2="9" />
+                        <line x1="12" y1="15" x2="12" y2="21" />
+                        <line x1="3" y1="12" x2="9" y2="12" />
+                        <line x1="15" y1="12" x2="21" y2="12" />
+                    </svg>
+                </div>
             </div>
-            <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-gray-400 uppercase tracking-[0.15em] font-semibold mb-1">{title}</p>
-                <p className={`text-2xl font-bold tracking-tight text-white`}>{value}</p>
-                <p className="text-xs text-gray-500 mt-1">{sub}</p>
-            </div>
+            <p style={{ fontFamily: "var(--font-syne)", fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px" }}>
+                No Trade Data Yet
+            </p>
+            <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "12px", color: "var(--text-muted)", maxWidth: "340px", margin: "0 auto" }}>
+                Analytics will populate once the bot executes and closes paper trades. Let the automation loop run.
+            </p>
         </div>
     );
 }
@@ -69,187 +103,232 @@ export default function AnalyticsPage() {
 
     const fetchAnalytics = useCallback(async () => {
         setError(null);
+        setLoading(true);
         try {
             const res = await fetch(`${API}/api/analytics`);
-            if (!res.ok) throw new Error("API error");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             setData(json);
-        } catch (e: any) {
-            setError(e.message || "Cannot reach backend");
+        } catch (e: unknown) {
+            // Show a friendly message — not a hard error block
+            setError(e instanceof Error ? e.message : "Cannot reach backend");
         } finally {
             setLoading(false);
         }
     }, []);
 
-    useEffect(() => {
-        fetchAnalytics();
-    }, [fetchAnalytics]);
+    useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
 
-    const pnlColor = data && data.total_pnl >= 0 ? "bg-emerald-400" : "bg-red-400";
-    const strokeColor = data && data.total_pnl >= 0 ? "#34d399" : "#f87171"; // Emerald-400 or Red-400
-    const fillColor = data && data.total_pnl >= 0 ? "url(#colorGreen)" : "url(#colorRed)";
-
-    // Format data for Recharts Pie
+    const pnlPositive = data && data.total_pnl >= 0;
+    const strokeColor = pnlPositive ? "var(--green)" : "var(--red)";
     const wins = data ? Math.round((data.win_rate / 100) * data.total_trades) : 0;
     const losses = data ? data.total_trades - wins : 0;
     const pieData = [
-        { name: "Wins", value: wins, color: "#34d399" },
-        { name: "Losses", value: losses, color: "#f87171" },
+        { name: "Wins", value: wins || 1, color: "var(--green)" },
+        { name: "Losses", value: losses || 0, color: "var(--red)" },
     ];
 
     return (
-        <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between flex-wrap gap-4">
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+
+            {/* ── Header ───────────────────────────────────────────────────────── */}
+            <div className="page-enter" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
                 <div>
-                    <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
-                        <Activity className="w-6 h-6 text-fuchsia-400" />
-                        Performance Analytics
-                    </h1>
-                    <p className="text-sm text-gray-500 mt-0.5">Advanced metrics & equity growth (Paper Trading)</p>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+                        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="var(--cyan)" strokeWidth="1.5">
+                            <polyline points="1,13 5,7 8,10 12,4 17,8" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <h1 style={{ fontFamily: "var(--font-syne)", fontSize: "28px", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text-primary)", margin: 0 }}>
+                            Performance Analytics
+                        </h1>
+                    </div>
+                    <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--text-muted)", margin: 0, letterSpacing: "0.05em" }}>
+                        PAPER TRADING · CUMULATIVE PNL & TRADE ACCURACY
+                    </p>
                 </div>
                 <button
                     onClick={fetchAnalytics}
                     disabled={loading}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 hover:text-white transition-all disabled:opacity-50"
+                    style={{
+                        display: "flex", alignItems: "center", gap: "6px",
+                        padding: "7px 14px", borderRadius: "8px",
+                        background: "var(--bg-card)", border: "1px solid var(--border)",
+                        fontFamily: "var(--font-jetbrains)", fontSize: "11px", letterSpacing: "0.08em",
+                        color: loading ? "var(--text-muted)" : "var(--text-secondary)",
+                        textTransform: "uppercase", cursor: "pointer", opacity: loading ? 0.6 : 1
+                    }}
                 >
-                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.5"
+                        style={{ animation: loading ? "spin 1s linear infinite" : "none" }}>
+                        <path d="M1 5.5A4.5 4.5 0 1 0 5.5 1" strokeLinecap="round" />
+                        <path d="M1 1.5v3.5h3.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {loading ? "SYNCING…" : "REFRESH"}
                 </button>
             </div>
 
+            {/* ── Backend offline banner (soft, not blocking) ───────────────────── */}
             {error && (
-                <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-950/40 border border-red-800/50 text-red-400 text-sm">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    {error}
+                <div style={{
+                    display: "flex", alignItems: "center", gap: "10px",
+                    padding: "10px 14px", borderRadius: "8px",
+                    background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)",
+                    fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--amber)"
+                }}>
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor">
+                        <path d="M6.5 1a5.5 5.5 0 1 0 0 11A5.5 5.5 0 0 0 6.5 1zm0 9a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm.5-4h-1V3.5h1V6z" />
+                    </svg>
+                    Backend unreachable — {error} · Showing last cached data
                 </div>
             )}
 
-            {/* Top Stats */}
-            {data && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <StatCard
-                        title="Total Net PnL"
+            {/* ── Loading shimmer ───────────────────────────────────────────────── */}
+            {loading && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
+                    {[...Array(3)].map((_, i) => (
+                        <div key={i} className="shimmer" style={{ height: "100px", borderRadius: "12px" }} />
+                    ))}
+                </div>
+            )}
+
+            {/* ── Stats row ────────────────────────────────────────────────────── */}
+            {data && !loading && (
+                <div className="page-enter page-enter-delay-1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
+                    <MetricCard
+                        label="Net PnL"
                         value={`${data.total_pnl >= 0 ? "+" : ""}$${data.total_pnl.toFixed(2)}`}
-                        sub="Simulated Returns"
-                        icon={TrendingUp}
-                        trendColor={pnlColor}
+                        sub="Simulated paper returns"
+                        color={pnlPositive ? "var(--green)" : "var(--red)"}
                     />
-                    <StatCard
-                        title="Win Rate"
+                    <MetricCard
+                        label="Win Rate"
                         value={`${data.win_rate.toFixed(1)}%`}
-                        sub={`${wins} Win / ${losses} Loss`}
-                        icon={Target}
-                        trendColor="bg-cyan-400"
+                        sub={`${wins} wins · ${losses} losses`}
+                        color="var(--cyan)"
                     />
-                    <StatCard
-                        title="Total Executions"
+                    <MetricCard
+                        label="Closed Trades"
                         value={`${data.total_trades}`}
-                        sub="Closed trades only"
-                        icon={Activity}
-                        trendColor="bg-violet-400"
+                        sub="Paper executions only"
+                        color="var(--violet)"
                     />
                 </div>
             )}
 
-            {/* Charts */}
+            {/* ── Charts ───────────────────────────────────────────────────────── */}
             {data && data.total_trades > 0 ? (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="page-enter page-enter-delay-2" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "16px" }}>
+
                     {/* Equity Curve */}
-                    <div className="lg:col-span-2 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-6 flex flex-col">
-                        <h2 className="text-sm font-semibold text-white mb-6 flex items-center gap-2">
-                            <TrendingUp className="w-4 h-4 text-emerald-400" />
+                    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px" }}>
+                        <p style={{ fontFamily: "var(--font-syne)", fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "16px" }}>
                             Equity Curve
-                        </h2>
-                        <div className="h-[300px] w-full">
+                        </p>
+                        <div style={{ height: "300px" }}>
                             <ResponsiveContainer width="100%" height="100%">
-                                <AreaChart data={data.equity_curve} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                <AreaChart data={data.equity_curve} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
                                     <defs>
-                                        <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#34d399" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
-                                        </linearGradient>
-                                        <linearGradient id="colorRed" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#f87171" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
+                                        <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={pnlPositive ? "#22c55e" : "#ef4444"} stopOpacity={0.25} />
+                                            <stop offset="95%" stopColor={pnlPositive ? "#22c55e" : "#ef4444"} stopOpacity={0} />
                                         </linearGradient>
                                     </defs>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                                     <XAxis
                                         dataKey="date"
-                                        tickFormatter={(val) => new Date(val).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                        stroke="#ffffff40"
-                                        fontSize={11}
-                                        tickMargin={10}
+                                        tickFormatter={(v) => new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                        stroke="rgba(255,255,255,0.15)"
+                                        tick={{ fontFamily: "var(--font-jetbrains)", fontSize: 10, fill: "var(--text-muted)" }}
+                                        tickMargin={8}
                                     />
-                                    <YAxis stroke="#ffffff40" fontSize={11} tickFormatter={(val) => `$${val}`} />
-                                    <RechartsTooltip
-                                        contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', fontSize: '12px', color: '#fff' }}
-                                        itemStyle={{ color: '#fff' }}
-                                        labelFormatter={(val) => new Date(val).toLocaleString()}
-                                        formatter={(val: number) => [`$${val.toFixed(2)}`, 'Cumulative PnL']}
+                                    <YAxis
+                                        stroke="rgba(255,255,255,0.15)"
+                                        tick={{ fontFamily: "var(--font-jetbrains)", fontSize: 10, fill: "var(--text-muted)" }}
+                                        tickFormatter={(v) => `$${v}`}
                                     />
-                                    <Area type="monotone" dataKey="cumulative_pnl" stroke={strokeColor} strokeWidth={2} fillOpacity={1} fill={fillColor} />
+                                    <RechartsTooltip content={<ChartTooltip />} />
+                                    <Area type="monotone" dataKey="cumulative_pnl" stroke={strokeColor} strokeWidth={2} fill="url(#areaFill)" dot={false} />
                                 </AreaChart>
                             </ResponsiveContainer>
                         </div>
                     </div>
 
-                    {/* Win/Loss Split */}
-                    <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-6 flex flex-col justify-between">
-                        <h2 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                            <Target className="w-4 h-4 text-cyan-400" />
+                    {/* Win/Loss Pie */}
+                    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px", display: "flex", flexDirection: "column" }}>
+                        <p style={{ fontFamily: "var(--font-syne)", fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "16px" }}>
                             Trade Accuracy
-                        </h2>
-                        <div className="flex-1 flex flex-col items-center justify-center relative min-h-[200px]">
+                        </p>
+                        <div style={{ flex: 1, position: "relative", minHeight: "200px" }}>
                             <ResponsiveContainer width="100%" height="100%">
                                 <PieChart>
-                                    <Pie
-                                        data={pieData}
-                                        cx="50%"
-                                        cy="50%"
-                                        innerRadius={60}
-                                        outerRadius={80}
-                                        paddingAngle={5}
-                                        dataKey="value"
-                                        stroke="none"
-                                    >
-                                        {pieData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
+                                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={4} dataKey="value" stroke="none">
+                                        {pieData.map((_, i) => (
+                                            <Cell key={i} fill={pieData[i].color} />
                                         ))}
                                     </Pie>
-                                    <RechartsTooltip
-                                        contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', fontSize: '12px', color: '#fff' }}
-                                        itemStyle={{ color: '#fff' }}
-                                    />
+                                    <RechartsTooltip contentStyle={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "11px", fontFamily: "var(--font-jetbrains)" }} />
                                 </PieChart>
                             </ResponsiveContainer>
-                            {/* Center Text */}
-                            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                                <span className="text-2xl font-bold text-white">{data.win_rate.toFixed(0)}%</span>
-                                <span className="text-[10px] text-gray-500 uppercase font-semibold tracking-wider">Win Rate</span>
+                            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                                <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "24px", fontWeight: 700, color: "var(--text-primary)" }}>
+                                    {data.win_rate.toFixed(0)}%
+                                </span>
+                                <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "9px", color: "var(--text-muted)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                                    Win Rate
+                                </span>
                             </div>
                         </div>
-                        <div className="flex justify-center gap-6 mt-4">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-sm bg-emerald-400"></div>
-                                <span className="text-xs text-gray-400 uppercase font-semibold">Wins ({wins})</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-sm bg-red-400"></div>
-                                <span className="text-xs text-gray-400 uppercase font-semibold">Losses ({losses})</span>
-                            </div>
+                        {/* Legend */}
+                        <div style={{ display: "flex", justifyContent: "center", gap: "20px", marginTop: "12px" }}>
+                            {[{ label: "Wins", count: wins, color: "var(--green)" }, { label: "Losses", count: losses, color: "var(--red)" }].map((l) => (
+                                <div key={l.label} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                    <div style={{ width: "8px", height: "8px", borderRadius: "2px", background: l.color }} />
+                                    <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "10px", color: "var(--text-muted)", letterSpacing: "0.05em" }}>
+                                        {l.label} ({l.count})
+                                    </span>
+                                </div>
+                            ))}
                         </div>
                     </div>
+
+                    {/* Trade PnL Bar Chart */}
+                    {data.equity_curve.length > 1 && (
+                        <div style={{ gridColumn: "1 / -1", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px" }}>
+                            <p style={{ fontFamily: "var(--font-syne)", fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "16px" }}>
+                                Per-Trade PnL
+                            </p>
+                            <div style={{ height: "200px" }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={data.equity_curve} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                                        <XAxis
+                                            dataKey="ticker"
+                                            stroke="rgba(255,255,255,0.15)"
+                                            tick={{ fontFamily: "var(--font-jetbrains)", fontSize: 10, fill: "var(--text-muted)" }}
+                                        />
+                                        <YAxis
+                                            stroke="rgba(255,255,255,0.15)"
+                                            tick={{ fontFamily: "var(--font-jetbrains)", fontSize: 10, fill: "var(--text-muted)" }}
+                                            tickFormatter={(v) => `$${v}`}
+                                        />
+                                        <RechartsTooltip contentStyle={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "6px", fontSize: "11px", fontFamily: "var(--font-jetbrains)" }} />
+                                        <Bar dataKey="trade_pnl" radius={[4, 4, 0, 0]}>
+                                            {data.equity_curve.map((entry, i) => (
+                                                <Cell key={i} fill={entry.trade_pnl >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)"} />
+                                            ))}
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    )}
                 </div>
             ) : (
-                !loading && !error && (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-16 text-center text-sm text-gray-500">
-                        No closed paper trades available to generate analytics. Let the bot run and execute some trades first!
-                    </div>
-                )
+                !loading && <EmptyState />
             )}
+
+            <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
         </div>
     );
 }

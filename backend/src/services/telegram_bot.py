@@ -63,6 +63,34 @@ async def send_telegram_message(text: str, parse_mode: str = "HTML", reply_marku
 send_message = send_telegram_message
 
 
+async def send_photo_alert(photo_path: str, caption: str, parse_mode: str = "HTML") -> None:
+    """
+    Sends a local image as a photo message to all configured Telegram chats.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_ids_str = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not token or not chat_ids_str:
+        logger.warning("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing. Skipping photo notification.")
+        return
+
+    chat_ids = [cid.strip() for cid in chat_ids_str.split(",") if cid.strip()]
+    if not chat_ids:
+        return
+
+    try:
+        import telegram
+        bot = telegram.Bot(token=token)
+        for chat_id in chat_ids:
+            try:
+                with open(photo_path, 'rb') as f:
+                    await bot.send_photo(chat_id=chat_id, photo=f, caption=caption, parse_mode=parse_mode)
+            except Exception as e:
+                logger.error(f"Failed to send Telegram photo to {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Telegram Bot Photo send error: {e}")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Institutional Templates (Phase 38)
 # ═══════════════════════════════════════════════════════════════════════════

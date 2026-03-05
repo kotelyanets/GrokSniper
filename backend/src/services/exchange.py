@@ -30,8 +30,9 @@ class CryptoExchange:
     """
     def __init__(self):
         self._has_keys = bool(BINANCE_API_KEY and BINANCE_API_SECRET)
-        if not self._has_keys:
-            logger.warning("Binance API keys not found. Trades will be simulated (dry-run).")
+        self._dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
+        if not self._has_keys or self._dry_run:
+            logger.warning("Simulation mode active (no keys or DRY_RUN=True). Trades will be simulated.")
 
     async def place_order(self, ticker: str, action: str, amount: float) -> dict:
         """
@@ -39,7 +40,7 @@ class CryptoExchange:
         Returns execution details.
         """
         # --- Mock / DRY-RUN path ------------------------------------------------
-        if not self._has_keys:
+        if not self._has_keys or self._dry_run:
             mock_price = 50000.0
             logger.info(f"[DRY-RUN] {action} {ticker} @ {mock_price} (mock)")
             return {
@@ -116,8 +117,9 @@ class CryptoExchange:
         Fetches the current balance from Binance.
         Returns a dict with 'USDT' and other asset totals.
         """
-        if not self._has_keys:
-            return {"USDT": 10000.0, "BTC": 0.0, "total_usdt": 10000.0, "dry_run": True}
+        if not self._has_keys or self._dry_run:
+            _initial = float(os.getenv("INITIAL_EQUITY", "1000.0"))
+            return {"USDT": _initial, "BTC": 0.0, "total_usdt": _initial, "holdings": [], "dry_run": True}
 
         exchange = ccxt.binance({
             'apiKey': BINANCE_API_KEY,
@@ -163,8 +165,8 @@ class CryptoExchange:
         Fetches the current free (available) balance for a specific currency.
         Used for position sizing.
         """
-        if not self._has_keys:
-            return 10000.0 if currency == 'USDT' else 0.0
+        if not self._has_keys or self._dry_run:
+            return float(os.getenv("INITIAL_EQUITY", "1000.0")) if currency == 'USDT' else 0.0
 
         exchange = ccxt.binance({
             'apiKey': BINANCE_API_KEY,
@@ -186,7 +188,7 @@ class CryptoExchange:
 
     async def get_price(self, ticker: str) -> float:
         """Fetches the current market price for a ticker."""
-        if not self._has_keys:
+        if not self._has_keys or self._dry_run:
             return 50000.0 # Mock price
         
         symbol = f"{ticker}/USDT" if "/" not in ticker else ticker
@@ -218,7 +220,7 @@ class CryptoExchange:
         """
         Fetches the top N tickers by 24h volume from Binance.
         """
-        if not self._has_keys:
+        if not self._has_keys or self._dry_run:
             return ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "SHIB", "DOT"]
 
         exchange = ccxt.binance({
@@ -244,7 +246,7 @@ class CryptoExchange:
         Fetches OHLCV data on the 1h timeframe and calculates all elite strategy indicators:
         EMA_20, EMA_50, RSI_14, MACD (line + signal), Volume SMA_20, and raw candle OHLC.
         """
-        if not self._has_keys:
+        if not self._has_keys or self._dry_run:
             return {
                 "rsi": 50.0, "ema_20": 50000.0, "ema_50": 50000.0,
                 "current_volume": 1000.0, "volume_sma_20": 500.0,

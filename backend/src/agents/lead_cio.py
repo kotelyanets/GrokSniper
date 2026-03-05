@@ -10,16 +10,16 @@ import os
 
 from crewai import Agent, Task
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
+from langchain_groq import ChatGroq
 
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# LLM — Anthropic Claude
+# LLM — Groq (llama-3.3-70b-versatile)
 # ---------------------------------------------------------------------------
-llm = ChatAnthropic(
-    model="claude-sonnet-4-20250514",
-    api_key=os.getenv("ANTHROPIC_API_KEY"),
+llm = ChatGroq(
+    model="groq/llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.3,
 )
 

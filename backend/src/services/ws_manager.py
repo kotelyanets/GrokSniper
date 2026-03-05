@@ -22,6 +22,7 @@ Architecture:
 import asyncio
 import json
 import logging
+import os
 from decimal import Decimal
 
 import websockets
@@ -67,15 +68,29 @@ async def _close_position(
     and sends the Telegram alert.
     Called once per trade when an exit condition fires.
     """
-    # SHORT: BUY to close.  LONG: SELL to close.
     close_action = "BUY" if side == "SHORT" else "SELL"
     logger.info(f"[WS EXIT] {trade.ticker} ({side}) → {exit_label} → {close_action}")
 
-    sell_order = await _exchange.place_order(
-        ticker=trade.ticker,
-        action=close_action,
-        amount=0
-    )
+    is_paper = os.getenv("PAPER_TRADE", "False").lower() == "true"
+    
+    if is_paper:
+        logger.info(f"[WS EXIT] Simulated {close_action} for PAPER TRADE {trade.ticker}")
+        # In paper mode, we assume execution at the current streaming price (which we don't have exactly here,
+        # but we can approximate it as the stop_loss / take_profit trigger price, or entry price if neutral)
+        # We'll use the trailing trigger or stop trigger as the execution price
+        current_price = lowest_price if side == "LONG" else highest_price
+        
+        sell_order = {
+            "status": "success",
+            "price": current_price if current_price > 0 else entry_price,
+            "amount": trade.amount
+        }
+    else:
+        sell_order = await _exchange.place_order(
+            ticker=trade.ticker,
+            action=close_action,
+            amount=0  # 0 indicates close position
+        )
 
     if sell_order["status"] != "success":
         logger.error(f"[WS EXIT] {close_action} order failed for {trade.ticker}: {sell_order}")
@@ -133,15 +148,13 @@ async def _watch_trade(trade_id: str) -> None:
     Opens a persistent Binance trade-stream WebSocket for a single open position
     and evaluates exit conditions on every price tick.
 
-    LONG exits (existing):
-      1. Hard Stop-Loss  : price <= entry * 0.97
-      2. Take Profit     : price >= entry * 1.10
-      3. Delayed Trailing: (peak >= entry * 1.04) AND price <= peak * 0.985
+    LONG exits (Phase 41):
+      1. Hard Stop-Loss  : ATR dynamic or price <= entry * 0.97
+      2. Delayed Trailing: (peak >= entry * 1.054) AND price <= peak * 0.997 (Catches hyper-trends)
 
-    SHORT exits (Phase 30):
-      1. Hard Stop-Loss  : price >= entry * 1.03  (3% loss)
-      2. Take Profit     : price <= entry * 0.90  (10% profit)
-      3. Delayed Trailing: (trough <= entry * 0.96) AND price >= trough * 1.015
+    SHORT exits (Phase 41):
+      1. Hard Stop-Loss  : ATR dynamic or price >= entry * 1.03
+      2. Delayed Trailing: (trough <= entry * 0.946) AND price >= trough * 1.003
     """
     # ── Load trade from DB ────────────────────────────────────────────────
     async with AsyncSessionLocal() as session:
@@ -170,9 +183,9 @@ async def _watch_trade(trade_id: str) -> None:
 
     # Track whether we already sent the trailing-stop activation alert
     if side == "SHORT":
-        trailing_activated = lowest_price <= entry_price * 0.96
+        trailing_activated = lowest_price <= entry_price * 0.946
     else:
-        trailing_activated = highest_price >= entry_price * 1.04
+        trailing_activated = highest_price >= entry_price * 1.054
 
     try:
         async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
@@ -195,7 +208,7 @@ async def _watch_trade(trade_id: str) -> None:
                         asyncio.create_task(_update_peak(trade_id, highest_price))
 
                     # ── Trailing Stop Activation Alert ────────────────────
-                    if not trailing_activated and highest_price >= entry_price * 1.04:
+                    if not trailing_activated and highest_price >= entry_price * 1.054:
                         trailing_activated = True
                         pnl_now = ((price - entry_price) / entry_price) * 100
                         trail_msg = (
@@ -204,9 +217,9 @@ async def _watch_trade(trade_id: str) -> None:
                             f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
                             f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
                             f"<b>Пик:</b> ${highest_price:,.4f}\n"
-                            f"<b>Trail trigger:</b> ${highest_price * 0.985:,.4f}\n\n"
-                            f"Позиция теперь защищена скользящим стопом (-1.5% от пика).\n"
-                            f"Минимальная прибыль гарантирована! 🛡️"
+                            f"<b>Trail trigger:</b> ${highest_price * 0.997:,.4f}\n\n"
+                            f"Позиция переведена в безубыток. Стоп ползет за ценой!\n"
+                            f"Ловим гипер-тренд 🚀"
                         )
                         asyncio.create_task(send_telegram_message(trail_msg))
                         logger.info(f"[WS] Trailing stop activated for {ticker} at ${price:,.4f}")
@@ -224,21 +237,13 @@ async def _watch_trade(trade_id: str) -> None:
                             f"stop ${dynamic_sl:,.4f}, -{sl_pct:.1f}%)"
                         )
 
-                    # 2. Fixed Take Profit: +10% from entry
-                    elif price >= entry_price * 1.10:
-                        exit_reason = "take_profit"
-                        exit_label  = (
-                            f"Take Profit (+10% | entry ${entry_price:,.4f} → "
-                            f"target ${entry_price * 1.10:,.4f})"
-                        )
-
-                    # 3. Delayed Trailing Stop: activates only after +4% profit
-                    elif highest_price >= entry_price * 1.04:
-                        trailing_trigger = highest_price * 0.985
+                    # 2. Delayed Trailing Stop: activates only after +5.4% profit
+                    elif highest_price >= entry_price * 1.054:
+                        trailing_trigger = highest_price * 0.997
                         if price <= trailing_trigger:
                             exit_reason = "trailing_stop"
                             exit_label  = (
-                                f"Delayed Trailing Stop (-1.5% from peak "
+                                f"Delayed Trailing Stop (-0.3% from peak "
                                 f"${highest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
                             )
 
@@ -259,6 +264,7 @@ async def _watch_trade(trade_id: str) -> None:
                             entry_price=entry_price,
                             highest_price=highest_price,
                             side="LONG",
+                            lowest_price=price, # Pass current price to close_position for paper mode
                         )
                         return
 
@@ -272,7 +278,7 @@ async def _watch_trade(trade_id: str) -> None:
                         asyncio.create_task(_update_trough(trade_id, lowest_price))
 
                     # ── Trailing Stop Activation Alert (SHORT) ────────────
-                    if not trailing_activated and lowest_price <= entry_price * 0.96:
+                    if not trailing_activated and lowest_price <= entry_price * 0.946:
                         trailing_activated = True
                         pnl_now = ((entry_price - price) / entry_price) * 100
                         trail_msg = (
@@ -281,9 +287,9 @@ async def _watch_trade(trade_id: str) -> None:
                             f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
                             f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
                             f"<b>Минимум:</b> ${lowest_price:,.4f}\n"
-                            f"<b>Trail trigger:</b> ${lowest_price * 1.015:,.4f}\n\n"
-                            f"SHORT защищён trailing stop (+1.5% от минимума).\n"
-                            f"Прибыль зафиксирована! 🛡️"
+                            f"<b>Trail trigger:</b> ${lowest_price * 1.003:,.4f}\n\n"
+                            f"SHORT переведен в безубыток. Стоп ползет за ценой!\n"
+                            f"Ловим гипер-тренд 🚀"
                         )
                         asyncio.create_task(send_telegram_message(trail_msg))
                         logger.info(f"[WS] SHORT trailing stop activated for {ticker} at ${price:,.4f}")
@@ -301,21 +307,13 @@ async def _watch_trade(trade_id: str) -> None:
                             f"stop ${dynamic_sl:,.4f}, +{sl_pct:.1f}%)"
                         )
 
-                    # 2. Fixed Take Profit: -10% from entry (SHORT wins when price drops)
-                    elif price <= entry_price * 0.90:
-                        exit_reason = "take_profit"
-                        exit_label  = (
-                            f"SHORT Take Profit (-10% | entry ${entry_price:,.4f} → "
-                            f"target ${entry_price * 0.90:,.4f})"
-                        )
-
-                    # 3. Delayed Trailing Stop: activates after -4% profit for SHORT
-                    elif lowest_price <= entry_price * 0.96:
-                        trailing_trigger = lowest_price * 1.015
+                    # 2. Delayed Trailing Stop: activates after -5.4% profit for SHORT
+                    elif lowest_price <= entry_price * 0.946:
+                        trailing_trigger = lowest_price * 1.003
                         if price >= trailing_trigger:
                             exit_reason = "trailing_stop"
                             exit_label  = (
-                                f"SHORT Trailing Stop (+1.5% from trough "
+                                f"SHORT Trailing Stop (+0.3% from trough "
                                 f"${lowest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
                             )
 
@@ -334,7 +332,7 @@ async def _watch_trade(trade_id: str) -> None:
                             exit_reason=exit_reason,
                             exit_label=exit_label,
                             entry_price=entry_price,
-                            highest_price=highest_price,
+                            highest_price=price, # Pass current price to close_position for paper mode
                             side="SHORT",
                             lowest_price=lowest_price,
                         )

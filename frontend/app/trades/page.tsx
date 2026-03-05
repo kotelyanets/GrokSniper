@@ -15,9 +15,8 @@ import {
     Loader2,
 } from "lucide-react";
 
-const API = "http://127.0.0.1:8000";
-const WS_URL = "ws://127.0.0.1:8000/ws/dashboard";
-
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const WS_URL = API.replace(/^http/, "ws") + "/ws/dashboard";
 interface TradeItem {
     id: string;
     ticker: string;
@@ -27,6 +26,7 @@ interface TradeItem {
     status: string;
     side?: string;
     reason?: string;
+    is_closed: boolean;
     created_at: string;
 }
 
@@ -116,6 +116,7 @@ export default function TradesPage() {
     const [batchSize, setBatchSize] = useState(15);
     const [visibleCount, setVisibleCount] = useState(15);
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [closingId, setClosingId] = useState<string | null>(null);
 
     const fetchTrades = useCallback(async () => {
         setError(null);
@@ -163,6 +164,21 @@ export default function TradesPage() {
         connect();
         return () => { ws?.close(); clearTimeout(reconnectTimer); };
     }, [fetchTrades]);
+
+    const handleCloseTrade = async (tradeId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setClosingId(tradeId);
+        try {
+            const res = await fetch(`${API}/api/trades/${tradeId}/close`, { method: "POST" });
+            const data = await res.json();
+            if (!res.ok || data.status === "error") throw new Error(data.message || "Failed to close");
+            await fetchTrades();
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : "Error closing trade");
+        } finally {
+            setClosingId(null);
+        }
+    };
 
     const visibleTrades = trades.slice(0, visibleCount);
 
@@ -241,7 +257,7 @@ export default function TradesPage() {
                         <thead>
                             <tr className="border-b border-white/10">
                                 <th className="px-4 py-3.5 w-8" />
-                                {["ID", "Time", "Ticker", "Type", "Amount", "Price", "Status"].map((col) => (
+                                {["ID", "Time", "Ticker", "Type", "Amount", "Price", "Status", "Action"].map((col) => (
                                     <th key={col} className="px-4 py-3.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                                         {col}
                                     </th>
@@ -252,14 +268,14 @@ export default function TradesPage() {
                             {loading && trades.length === 0 ? (
                                 [...Array(Math.min(batchSize, 6))].map((_, i) => (
                                     <tr key={i} className="animate-pulse">
-                                        {[...Array(8)].map((_, j) => (
+                                        {[...Array(9)].map((_, j) => (
                                             <td key={j} className="px-4 py-4"><div className="h-3 bg-white/5 rounded w-16" /></td>
                                         ))}
                                     </tr>
                                 ))
                             ) : visibleTrades.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="px-6 py-16 text-center text-sm text-gray-600">
+                                    <td colSpan={9} className="px-6 py-16 text-center text-sm text-gray-600">
                                         No trades yet — trigger the bot from the Dashboard.
                                     </td>
                                 </tr>
@@ -307,6 +323,19 @@ export default function TradesPage() {
                                                     <span className="inline-flex items-center gap-1.5 text-xs text-red-400">
                                                         <AlertCircle className="w-3.5 h-3.5" /> Failed
                                                     </span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                {!t.is_closed && t.action === "BUY" ? (
+                                                    <button
+                                                        onClick={(e) => handleCloseTrade(t.id, e)}
+                                                        disabled={closingId === t.id}
+                                                        className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-md text-xs font-semibold transition-all shadow-[0_0_10px_rgba(239,68,68,0.1)] hover:shadow-[0_0_15px_rgba(239,68,68,0.3)] disabled:opacity-50 flex items-center gap-2"
+                                                    >
+                                                        {closingId === t.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Close"}
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-gray-600 text-[10px] font-mono tracking-widest">-</span>
                                                 )}
                                             </td>
                                         </tr>,

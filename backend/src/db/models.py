@@ -145,6 +145,7 @@ class PaperTrade(Base):
     exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     pnl_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)
     strategy_used: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ai_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
