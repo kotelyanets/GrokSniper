@@ -5,31 +5,29 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "rec
 
 interface PortfolioChartProps {
     currentBalance: number;
-    tradesCount: number;
+    equityCurve: { date: string; cumulative_pnl: number; trade_pnl: number }[];
 }
 
-export default function PortfolioChart({ currentBalance, tradesCount }: PortfolioChartProps) {
-    // Generate an aesthetically pleasing equity curve ending at the current balance
+export default function PortfolioChart({ currentBalance, equityCurve }: PortfolioChartProps) {
+    // Generate an aesthetically pleasing equity curve using real DB data
     const data = useMemo(() => {
         const points = [];
-        const numPoints = Math.max(30, tradesCount + 10);
-        let current = 10000; // Starting baseline
+        let current = currentBalance - (equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].cumulative_pnl : 0); 
+        
+        // Base starting point
+        points.push({ time: "Start", value: current });
 
-        for (let i = 0; i < numPoints; i++) {
-            if (i === numPoints - 1) {
-                points.push({ time: i, value: currentBalance });
-                break;
-            }
-            // Add some random walk noise upwards
-            const change = (Math.random() - 0.4) * 80;
-            current += change;
+        for (let i = 0; i < equityCurve.length; i++) {
+            current += equityCurve[i].trade_pnl;
             points.push({ time: i, value: current });
         }
 
-        // Scale to end exactly at currentBalance smoothly if needed, but simple append works for effect
-        points[points.length - 1].value = currentBalance;
+        // Ensure the last point matches currentBalance exactly
+        if (points.length > 0) {
+            points[points.length - 1].value = currentBalance;
+        }
         return points;
-    }, [currentBalance, tradesCount]);
+    }, [currentBalance, equityCurve]);
 
     if (!data.length) return null;
 

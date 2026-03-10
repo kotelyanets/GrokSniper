@@ -383,8 +383,10 @@ async def monitor_open_positions_ws() -> None:
     - Spawns a `_watch_trade` task for each trade that doesn't already
       have an active watcher.
     - Cleans up finished/cancelled tasks from the registry.
+    - Uses backoff when DB is unreachable to avoid log spam.
     """
     logger.info("[WS Supervisor] Starting real-time position monitor...")
+    backoff = 5  # seconds, increases on repeated DB failures
 
     while True:
         try:
@@ -392,6 +394,9 @@ async def monitor_open_positions_ws() -> None:
                 stmt   = select(Trade).where(Trade.is_closed == False, Trade.action == "BUY")
                 result = await session.execute(stmt)
                 open_trades = result.scalars().all()
+
+            # DB is reachable — reset backoff
+            backoff = 5
 
             # Prune completed tasks from the registry
             dead = [tid for tid, task in _active_watchers.items() if task.done()]
@@ -410,6 +415,12 @@ async def monitor_open_positions_ws() -> None:
                     )
                     _active_watchers[tid] = task
 
+        except (ConnectionRefusedError, OSError) as e:
+            # DB is unreachable — use backoff to avoid log spam
+            logger.warning(f"[WS Supervisor] DB unreachable, retrying in {backoff}s: {e}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
         except Exception as e:
             logger.error(f"[WS Supervisor] Error: {e}")
 

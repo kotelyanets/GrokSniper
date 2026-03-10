@@ -14,7 +14,7 @@ import {
 
 function SectionCard({ title, icon: Icon, children }: {
     title: string;
-    icon: React.ElementType;
+    icon: React.ElementType | string;
     children: React.ReactNode;
 }) {
     return (

@@ -5,9 +5,10 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 interface WinRateChartProps {
     totalTrades: number;
+    winRate: number; // 0 to 100
 }
 
-export default function WinRateChart({ totalTrades }: WinRateChartProps) {
+export default function WinRateChart({ totalTrades, winRate }: WinRateChartProps) {
     const data = useMemo(() => {
         if (totalTrades === 0) {
             return [
@@ -15,7 +16,7 @@ export default function WinRateChart({ totalTrades }: WinRateChartProps) {
                 { name: "Loss", value: 0, color: "#ef4444" },
             ];
         }
-        const wins_pct = 0.68; // 68% win rate based on real backtesting stats
+        const wins_pct = winRate / 100;
         const wins = Math.floor(totalTrades * wins_pct);
         const losses = totalTrades - wins;
 

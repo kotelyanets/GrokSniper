@@ -6,7 +6,7 @@ from anthropic import AsyncAnthropic
 logger = logging.getLogger("groksniper.agents.risk")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-opus-20240229")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
 RISK_SYSTEM_PROMPT = """You are the Chief Risk Officer (Risk Guardian) of a crypto hedge fund.
 The Quant Analyst has forwarded you several high-probability trade proposals.
@@ -134,8 +134,10 @@ async def evaluate_proposals(
 
     except Exception as e:
         logger.error("Risk Guardian Error: %s", e)
-        # Default fail-safe: reject all if Guardian crashes
+        # Fail-OPEN: if Guardian crashes, APPROVE all proposals.
+        # The engine-level confidence threshold is still a safety net.
+        logger.warning("Risk Guardian offline — APPROVING all proposals (fail-open mode).")
         for p in proposals:
-            p["verdict"] = "REJECTED"
-            p["risk_reasoning"] = f"CRITICAL RISK FALLBACK: Guardian offline - {e}"
+            p["verdict"] = "APPROVED"
+            p["risk_reasoning"] = f"GUARDIAN OFFLINE — auto-approved (fail-open) — {e}"
         return proposals

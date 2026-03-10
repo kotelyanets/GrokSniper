@@ -100,7 +100,7 @@ class Trade(Base):
     stop_loss_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # ATR-based dynamic stop
     position_size_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)  # USD value equivalent dynamically calculated
     side: Mapped[str] = mapped_column(String(10), default="LONG")
-    reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="OPEN"
     )

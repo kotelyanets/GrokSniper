@@ -41,7 +41,7 @@ interface NewsItem {
   created_at: string;
 }
 
-interface TradeItem {
+export interface TradeItem {
   id: string;
   ticker: string;
   action: string;
@@ -50,6 +50,8 @@ interface TradeItem {
   status: string;
   is_closed: boolean;
   created_at: string;
+  updated_at?: string;
+  pnl_usdt?: number;
 }
 
 interface BotState {
@@ -351,22 +353,42 @@ function RiskRadarGauge({ currentPrice, sl, tp }: { currentPrice: number; sl: nu
 // ---------------------------------------------------------------------------
 // PnLCalendar
 // ---------------------------------------------------------------------------
-function PnLCalendar({ trades }: { trades: TradeItem[] }) {
-  const [days, setDays] = useState<{ day: number; pnl: number }[]>([]);
+function PnLCalendar({ analytics }: { analytics: { equity_curve: { date: string, trade_pnl: number }[] } }) {
+  const [days, setDays] = useState<{ day: number; pnl: number; realPnl: number }[]>([]);
 
   useEffect(() => {
-    // 14 weeks x 7 days compact grid
-    const generatedDays = Array.from({ length: 98 }, (_, i) => {
-      const val = Math.random();
-      let pnl = 0;
-      if (val > 0.85) pnl = 2; // Strong win
-      else if (val > 0.7) pnl = 1; // Win
-      else if (val < 0.1) pnl = -2; // Strong loss
-      else if (val < 0.2) pnl = -1; // Loss
-      return { day: i, pnl };
+    const generatedDays = Array.from({ length: 98 }, (_, i) => ({ day: i, pnl: 0, realPnl: 0 }));
+    
+    const now = new Date();
+    now.setHours(0,0,0,0);
+
+    if (analytics?.equity_curve) {
+      analytics.equity_curve.forEach((t: any) => {
+          const tradeDate = new Date(t.date);
+          tradeDate.setHours(0,0,0,0);
+          const diffTime = now.getTime() - tradeDate.getTime();
+          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+          
+          if (diffDays >= 0 && diffDays < 98) {
+              const idx = 97 - diffDays;
+              if (generatedDays[idx]) {
+                  generatedDays[idx].realPnl += t.trade_pnl;
+              }
+          }
+      });
+    }
+
+    const finalDays = generatedDays.map((d: any) => {
+        let score = 0;
+        if (d.realPnl > 50) score = 2;
+        else if (d.realPnl > 0) score = 1;
+        else if (d.realPnl < -50) score = -2;
+        else if (d.realPnl < 0) score = -1;
+        return { day: d.day, pnl: score, realPnl: d.realPnl };
     });
-    setDays(generatedDays);
-  }, []);
+
+    setDays(finalDays);
+  }, [analytics]);
 
   const getPnlColor = (pnl: number) => {
     if (pnl === 2) return "#22c55e";
@@ -399,7 +421,7 @@ function PnLCalendar({ trades }: { trades: TradeItem[] }) {
             cursor: "pointer",
             transition: "background 0.3s ease"
           }}
-          title={d.pnl > 0 ? "Profit" : d.pnl < 0 ? "Loss" : "No Activity"}
+          title={d.pnl > 0 ? `Profit: $${d.realPnl.toFixed(2)}` : d.pnl < 0 ? `Loss: $${Math.abs(d.realPnl).toFixed(2)}` : "No Activity"}
         />
       ))}
     </div>
@@ -635,6 +657,9 @@ export default function DashboardPage() {
     total_invested: 0, active_leverage: 0, avg_leverage: 0,
     tokens_consumed: 0, ai_analysis_count: 0, api_calls: 0
   });
+  const [analytics, setAnalytics] = useState({
+    total_trades: 0, win_rate: 0, total_pnl: 0, equity_curve: [] as any[]
+  });
   const [botState, setBotState] = useState<BotState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -657,14 +682,14 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [newsRes, tradesRes, statsRes] = await Promise.all([
-        fetch(`${API}/api/news`), fetch(`${API}/api/trades`), fetch(`${API}/api/stats`),
+      const [newsRes, tradesRes, statsRes, analyticsRes] = await Promise.all([
+        fetch(`${API}/api/news`), fetch(`${API}/api/trades`), fetch(`${API}/api/stats`), fetch(`${API}/api/analytics`),
       ]);
-      if (!newsRes.ok || !tradesRes.ok || !statsRes.ok) throw new Error("API error");
-      const [newsData, tradesData, statsData] = await Promise.all([
-        newsRes.json(), tradesRes.json(), statsRes.json(),
+      if (!newsRes.ok || !tradesRes.ok || !statsRes.ok || !analyticsRes.ok) throw new Error("API error");
+      const [newsData, tradesData, statsData, analyticsData] = await Promise.all([
+        newsRes.json(), tradesRes.json(), statsRes.json(), analyticsRes.json(),
       ]);
-      setNews(newsData); setTrades(tradesData); setStats(statsData);
+      setNews(newsData); setTrades(tradesData); setStats(statsData); setAnalytics(analyticsData);
       setLastRefresh(new Date());
     } catch {
       setError("Cannot reach backend — is the server running on :8000?");
@@ -986,7 +1011,7 @@ export default function DashboardPage() {
               <Calendar size={14} style={{ color: "var(--violet)" }} />
               <span className="section-label">PnL Consistency</span>
             </div>
-            <PnLCalendar trades={trades} />
+            <PnLCalendar analytics={analytics} />
             <div style={{ marginTop: "16px", display: "flex", gap: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                 <div style={{ width: "8px", height: "8px", background: "var(--green)", borderRadius: "1px" }} />
@@ -1024,7 +1049,7 @@ export default function DashboardPage() {
               <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "10px", color: "var(--text-muted)", letterSpacing: "0.08em" }}>REAL-TIME · 1H</span>
             </div>
             <div style={{ flex: 1, width: "100%" }}>
-              <LiveChart />
+              <LiveChart trades={trades} />
             </div>
           </div>
 
@@ -1041,7 +1066,7 @@ export default function DashboardPage() {
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: "150px" }}>
-                <PortfolioChart currentBalance={stats.total_balance} tradesCount={stats.total_trades} />
+                <PortfolioChart currentBalance={stats.total_balance} equityCurve={analytics.equity_curve} />
               </div>
             </div>
 
@@ -1054,7 +1079,7 @@ export default function DashboardPage() {
                 <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "10px", color: "var(--text-muted)" }}>{stats.total_trades} EXECUTIONS</span>
               </div>
               <div style={{ flex: 1, minHeight: "150px" }}>
-                <WinRateChart totalTrades={stats.total_trades} />
+                <WinRateChart totalTrades={analytics.total_trades} winRate={analytics.win_rate} />
               </div>
             </div>
           </div>

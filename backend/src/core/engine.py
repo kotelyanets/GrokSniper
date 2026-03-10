@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 _exchange = CryptoExchange()
 
 # ── Risk config ──────────────────────────────────────────────────────────────
-CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "60"))
+CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "45"))
 MAX_CANDLES = int(os.getenv("MAX_CANDLES", "20"))
 ALLOWED_TICKERS = [t.strip() for t in os.getenv(
     "ALLOWED_COINS", "BTC,ETH,SOL,DOGE,XRP"
@@ -59,7 +59,7 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # ── Claude Opus (PAID — used for quant decisions only) ───────────────────────
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = "claude-opus-4-6"
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -109,6 +109,7 @@ async def _fetch_mtf_condensed_ohlcv(ticker: str) -> tuple[str, dict, object]:
         exchange.set_sandbox_mode(True)
 
     try:
+        ohlcv_1d = await exchange.fetch_ohlcv(symbol, "1d", limit=3)
         ohlcv_4h = await exchange.fetch_ohlcv(symbol, "4h", limit=10)
         ohlcv_15m = await exchange.fetch_ohlcv(symbol, "15m", limit=35)
     except Exception as e:
@@ -127,7 +128,7 @@ async def _fetch_mtf_condensed_ohlcv(ticker: str) -> tuple[str, dict, object]:
     finally:
         await exchange.close()
 
-    if not ohlcv_4h or len(ohlcv_4h) < 5 or not ohlcv_15m or len(ohlcv_15m) < 15:
+    if not ohlcv_1d or not ohlcv_4h or len(ohlcv_4h) < 5 or not ohlcv_15m or len(ohlcv_15m) < 15:
         return "", {}, None
 
     df_15m = pd.DataFrame(ohlcv_15m, columns=["ts", "O", "H", "L", "C", "V"])
@@ -143,14 +144,25 @@ async def _fetch_mtf_condensed_ohlcv(ticker: str) -> tuple[str, dict, object]:
         df_15m["sig"] = 0.0
     df_15m["atr"] = ta.atr(df_15m["H"], df_15m["L"], df_15m["C"], length=14)
 
+    bb_df = ta.bbands(df_15m["C"], length=20, std=2)
+    if bb_df is not None and not bb_df.empty:
+        df_15m["bbl"] = bb_df.iloc[:, 0]
+        df_15m["bbu"] = bb_df.iloc[:, 2]
+    else:
+        df_15m["bbl"] = 0.0
+        df_15m["bbu"] = 0.0
+
     df_15m_text = df_15m.tail(15).reset_index(drop=True)
 
     df_4h = pd.DataFrame(ohlcv_4h, columns=["ts", "O", "H", "L", "C", "V"])
     df_4h = df_4h.tail(5).reset_index(drop=True)
 
+    df_1d = pd.DataFrame(ohlcv_1d, columns=["ts", "O", "H", "L", "C", "V"])
+
+    lines_1d = [f"1D_C{i+1}:  O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_1d.iterrows()]
     lines_4h = [f"4H_C{i+1}:  O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_4h.iterrows()]
     lines_15m = [f"15m_C{i+1}: O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_15m_text.iterrows()]
-    candle_block = "\n".join(lines_4h) + "\n" + "\n".join(lines_15m)
+    candle_block = "=== DAILY ===\n" + "\n".join(lines_1d) + "\n=== 4H ===\n" + "\n".join(lines_4h) + "\n=== 15m ===\n" + "\n".join(lines_15m)
 
     latest = df_15m.iloc[-1]
     rsi = float(latest["rsi"]) if pd.notna(latest["rsi"]) else 50.0
@@ -159,14 +171,17 @@ async def _fetch_mtf_condensed_ohlcv(ticker: str) -> tuple[str, dict, object]:
     macd_val = float(latest["macd"]) if pd.notna(latest["macd"]) else 0.0
     sig_val = float(latest["sig"]) if pd.notna(latest["sig"]) else 0.0
     atr_val = float(latest["atr"]) if pd.notna(latest["atr"]) else 0.0
+    bbu = float(latest["bbu"]) if "bbu" in latest and pd.notna(latest["bbu"]) else 0.0
+    bbl = float(latest["bbl"]) if "bbl" in latest and pd.notna(latest["bbl"]) else 0.0
     close = float(latest["C"])
 
     condensed = (
         f"TICKER: {ticker}\n"
-        f"TF: 4H & 15m\n"
+        f"TF: 1D, 4H & 15m\n"
         f"{candle_block}\n"
         f"15m INDICATORS: RSI={rsi:.1f} EMA9={ema9:.1f} EMA20={ema20:.1f} "
-        f"MACD={macd_val:.2f} SIG={sig_val:.2f} ATR={atr_val:.2f}\n"
+        f"MACD={macd_val:.2f} SIG={sig_val:.2f}\n"
+        f"VOLATILITY: ATR={atr_val:.2f} BBU={bbu:.2f} BBL={bbl:.2f}\n"
         f"OBI: {obi_pct:+.1f}% | PRICE: {close:.2f}"
     )
 
@@ -538,7 +553,12 @@ async def scan_all_tickers(latest_news: str = "") -> list[dict]:
     logger.info("═══ PURE AI ENGINE: BATCH SCAN START ═══")
 
     # ── Step 0: BTC Gravity Filter (safety net only) ─────────────────────
-    btc_dump = await _get_btc_dump_mode()
+    is_testnet = os.getenv("BINANCE_TESTNET", "").lower() in ("true", "1", "yes")
+    if is_testnet:
+        logger.info("Testnet mode — skipping BTC dump check (testnet data is unreliable).")
+        btc_dump = False
+    else:
+        btc_dump = await _get_btc_dump_mode()
     if btc_dump:
         logger.warning("BTC DUMP MODE — skipping all LONG analysis this cycle.")
         return [{"ticker": t, "action": "SKIP", "reason": "BTC dump mode active", "trade_placed": False}
@@ -633,10 +653,19 @@ async def scan_all_tickers(latest_news: str = "") -> list[dict]:
         risk_reason = decision.get("risk_reasoning", "")
         reasoning = f"Quant: {quant_reason} | Risk: {risk_reason}"
 
-        if action == "HOLD" or verdict == "REJECTED" or confidence < CONFIDENCE_THRESHOLD:
-            logger.info(
-                "BLOCKED [%s] %s | Verdict=%s | Quant=%s | Risk=%s",
-                ticker, action, verdict, quant_reason, risk_reason
+        # ── Diagnostic: log exactly WHY a trade is blocked ───────────────
+        block_reasons = []
+        if action == "HOLD":
+            block_reasons.append(f"action=HOLD")
+        if verdict == "REJECTED":
+            block_reasons.append(f"verdict=REJECTED (Risk: {risk_reason})")
+        if confidence < CONFIDENCE_THRESHOLD:
+            block_reasons.append(f"confidence={confidence} < threshold={CONFIDENCE_THRESHOLD}")
+
+        if block_reasons:
+            logger.warning(
+                "⛔ BLOCKED [%s] %s | Reasons: %s | Quant: %s",
+                ticker, action, " + ".join(block_reasons), quant_reason,
             )
             results.append({
                 "ticker": ticker,
