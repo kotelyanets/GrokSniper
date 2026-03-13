@@ -28,9 +28,9 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 # ---------------------------------------------------------------------------
 _MOCK_SENTIMENT = {
     "ticker": "BTC",
-    "sentiment_score": 0.85,
-    "confidence": 92,
-    "reason": "Market showing strong recovery signs and high institutional interest."
+    "sentiment_score": 0.0,
+    "confidence": 0,
+    "reason": "MOCK DATA — API key not configured. No real sentiment available."
 }
 
 class SentimentResult(BaseModel):

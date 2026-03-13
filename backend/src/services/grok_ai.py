@@ -32,8 +32,8 @@ GROK_TIMEOUT: float = float(os.getenv("GROK_TIMEOUT_SECONDS", "15"))
 # ---------------------------------------------------------------------------
 _MOCK_RESULT = {
     "ticker": "BTC",
-    "sentiment_score": 0.85,
-    "confidence": 90
+    "sentiment_score": 0.0,
+    "confidence": 0
 }
 
 # ---------------------------------------------------------------------------

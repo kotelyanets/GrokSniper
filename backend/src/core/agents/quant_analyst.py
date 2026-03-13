@@ -59,7 +59,7 @@ def _extract_json_quant(raw: str) -> list[dict]:
     if arr_match:
         try:
             return json.loads(arr_match.group(0))
-        except:
+        except (json.JSONDecodeError, ValueError):
             pass
 
     raise ValueError("Could not extract valid JSON array from Quant LLM response.")
