@@ -8,6 +8,7 @@ read files, list directories, write files, and execute terminal commands.
 """
 
 import os
+import shlex
 import subprocess
 import logging
 from pathlib import Path
@@ -140,8 +141,8 @@ def run_command(command: str, timeout: int = 30) -> str:
     try:
         logger.info(f"AI Assistant executing: {command}")
         result = subprocess.run(
-            command,
-            shell=True,
+            shlex.split(command),
+            shell=False,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,

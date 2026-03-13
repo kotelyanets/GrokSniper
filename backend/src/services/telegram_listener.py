@@ -30,7 +30,8 @@ _ALLOWED_ID = os.getenv("ALLOWED_TELEGRAM_ID", "").strip()
 def _is_authorized(update: Update) -> bool:
     """Check if the message sender is the authorized user."""
     if not _ALLOWED_ID:
-        return True  # No restriction configured — allow all
+        logger.warning("ALLOWED_TELEGRAM_ID not configured — denying access by default.")
+        return False  # No restriction configured — deny all for safety
     user = update.effective_user
     if user and str(user.id) == _ALLOWED_ID:
         return True
