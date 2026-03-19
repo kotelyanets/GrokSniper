@@ -8,6 +8,7 @@ def is_enabled(value: str | None, default: str = "False") -> bool:
 
 
 def build_trading_mode(paper_trade: str | None, dry_run: str | None, testnet: str | None) -> dict:
+    # Testnet defaults to enabled for safety if env is absent.
     paper_trade_enabled = is_enabled(paper_trade, "False")
     dry_run_enabled = is_enabled(dry_run, "False")
     testnet_enabled = is_enabled(testnet, "True")

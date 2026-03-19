@@ -24,6 +24,10 @@ def test_is_enabled_parses_common_values(raw, expected):
     assert is_enabled(raw) is expected
 
 
+def test_is_enabled_respects_custom_default():
+    assert is_enabled(None, "True") is True
+
+
 def test_build_trading_mode_live_enabled_only_when_all_flags_off():
     mode = build_trading_mode("False", "False", "False")
     assert mode["paper_trade"] is False

@@ -21,4 +21,8 @@ from scripts import migrate_to_live
     ],
 )
 def test_is_enabled_parses_common_boolean_forms(raw, expected):
-    assert migrate_to_live._is_enabled(raw) is expected
+    assert migrate_to_live.is_enabled(raw) is expected
+
+
+def test_is_enabled_respects_custom_default():
+    assert migrate_to_live.is_enabled(None, "True") is True

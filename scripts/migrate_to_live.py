@@ -4,7 +4,7 @@ import sys
 import time
 from dotenv import load_dotenv, set_key
 
-def _is_enabled(value: str, default: str = "False") -> bool:
+def is_enabled(value: str, default: str = "False") -> bool:
     return (value or default).strip().lower() in {"true", "1", "yes", "y", "on"}
 
 def print_header(title):
@@ -77,7 +77,7 @@ def main():
 
     # 2. Testnet configuration
     print_header("2. Binance Testnet Configuration")
-    testnet = _is_enabled(os.getenv("BINANCE_TESTNET", "True"))
+    testnet = is_enabled(os.getenv("BINANCE_TESTNET", "True"))
     print(f"Current BINANCE_TESTNET setting: {testnet}")
     
     if testnet:
@@ -94,7 +94,7 @@ def main():
 
     # 3. Dry Run configuration
     print_header("3. Dry Run Configuration")
-    dry_run = _is_enabled(os.getenv("DRY_RUN", "True"))
+    dry_run = is_enabled(os.getenv("DRY_RUN", "True"))
     print(f"Current DRY_RUN setting: {dry_run}")
     
     if dry_run:
@@ -117,7 +117,7 @@ def main():
 
     # 4. Paper Trade configuration
     print_header("4. Paper Trade Configuration")
-    paper_trade = _is_enabled(os.getenv("PAPER_TRADE", "True"))
+    paper_trade = is_enabled(os.getenv("PAPER_TRADE", "True"))
     print(f"Current PAPER_TRADE setting: {paper_trade}")
 
     if paper_trade:
