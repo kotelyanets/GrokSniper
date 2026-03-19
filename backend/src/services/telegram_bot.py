@@ -10,12 +10,40 @@ import os
 import httpx
 
 logger = logging.getLogger(__name__)
+TELEGRAM_MAX_TEXT_LEN = 4096
 
 def escape_html(text: str) -> str:
     """Escapes HTML special characters to prevent parsing errors in Telegram."""
     if not text:
         return ""
-    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _split_telegram_text(text: str, max_len: int = TELEGRAM_MAX_TEXT_LEN) -> list[str]:
+    """Splits text to satisfy Telegram message length limits."""
+    if not text:
+        return [""]
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    while len(text) > max_len:
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at > 0:
+            split_index = split_at + 1
+        else:
+            split_index = max_len
+        chunks.append(text[:split_index])
+        text = text[split_index:]
+    if text:
+        chunks.append(text)
+    return chunks
 
 async def send_telegram_message(text: str, parse_mode: str = "HTML", reply_markup: dict = None) -> None:
     """
@@ -37,27 +65,33 @@ async def send_telegram_message(text: str, parse_mode: str = "HTML", reply_marku
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     success_count = 0
+    message_chunks = _split_telegram_text(text)
 
     async with httpx.AsyncClient() as client:
         for chat_id in chat_ids:
-            payload = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True  # Keep chat clean
-            }
-            if reply_markup is not None:
-                payload["reply_markup"] = reply_markup
-                
-            try:
-                response = await client.post(url, json=payload, timeout=10.0)
-                response.raise_for_status()
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send Telegram message to {chat_id}: {e}")
+            for idx, chunk in enumerate(message_chunks):
+                payload = {
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True  # Keep chat clean
+                }
+                if idx == 0 and reply_markup is not None:
+                    payload["reply_markup"] = reply_markup
+
+                try:
+                    response = await client.post(url, json=payload, timeout=10.0)
+                    response.raise_for_status()
+                    success_count += 1
+                except httpx.TimeoutException as e:
+                    logger.error(f"Telegram timeout for {chat_id}: {e}")
+                except httpx.RequestError as e:
+                    logger.error(f"Telegram network error for {chat_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram message to {chat_id}: {e}")
 
     if success_count > 0:
-        logger.info(f"Telegram: Message sent to {success_count} recipients.")
+        logger.info(f"Telegram: Sent {success_count} message part(s).")
 
 # Alias for backward compatibility
 send_message = send_telegram_message

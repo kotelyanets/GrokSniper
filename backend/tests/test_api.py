@@ -9,6 +9,7 @@ Run with:  pytest backend/tests/test_api.py -v
 """
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -84,6 +85,32 @@ class TestBotStatusEndpoint:
     def test_has_started_at(self, client):
         data = client.get("/api/bot-status").json()
         assert "started_at" in data
+
+    def test_includes_trading_mode_flags(self, client):
+        data = client.get("/api/bot-status").json()
+        assert "trading_mode" in data
+        assert "paper_trade" in data["trading_mode"]
+        assert "dry_run" in data["trading_mode"]
+        assert "binance_testnet" in data["trading_mode"]
+        assert "live_trading_enabled" in data["trading_mode"]
+
+    def test_live_trading_enabled_false_when_any_safety_flag_enabled(self, client):
+        with patch.dict(
+            os.environ,
+            {"PAPER_TRADE": "True", "DRY_RUN": "False", "BINANCE_TESTNET": "False"},
+            clear=False,
+        ):
+            data = client.get("/api/bot-status").json()
+            assert data["trading_mode"]["live_trading_enabled"] is False
+
+    def test_live_trading_enabled_true_only_when_all_live_flags_set(self, client):
+        with patch.dict(
+            os.environ,
+            {"PAPER_TRADE": "False", "DRY_RUN": "False", "BINANCE_TESTNET": "False"},
+            clear=False,
+        ):
+            data = client.get("/api/bot-status").json()
+            assert data["trading_mode"]["live_trading_enabled"] is True
 
 
 # ---------------------------------------------------------------------------

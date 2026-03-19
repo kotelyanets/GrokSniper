@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 
 from backend.src.api.state import bot_state, dashboard_ws_manager
+from backend.src.api.trading_mode import build_trading_mode
 from backend.src.db.database import AsyncSessionLocal
 from backend.src.db.models import AgentDecisionLog, NewsLog, PaperTrade, Trade
 from backend.src.services.exchange import CryptoExchange
@@ -108,7 +109,14 @@ def _decimal_to_float(val) -> float | None:
 @router.get("/api/bot-status", response_model=dict)
 async def get_bot_status():
     """Returns the real-time cognitive state of the bot."""
-    return bot_state
+    return {
+        **bot_state,
+        "trading_mode": build_trading_mode(
+            os.getenv("PAPER_TRADE", "False"),
+            os.getenv("DRY_RUN", "False"),
+            os.getenv("BINANCE_TESTNET", "True"),
+        ),
+    }
 
 
 @router.get("/api/stats", response_model=StatsResponse)
