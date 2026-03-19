@@ -4,6 +4,9 @@ import sys
 import time
 from dotenv import load_dotenv, set_key
 
+def _is_enabled(value: str, default: str = "False") -> bool:
+    return (value or default).strip().lower() in {"true", "1", "yes", "y", "on"}
+
 def print_header(title):
     print("\n" + "=" * 50)
     print(f"🚀 {title.upper()}")
@@ -74,7 +77,7 @@ def main():
 
     # 2. Testnet configuration
     print_header("2. Binance Testnet Configuration")
-    testnet = os.getenv("BINANCE_TESTNET", "True").lower() == "true"
+    testnet = _is_enabled(os.getenv("BINANCE_TESTNET", "True"))
     print(f"Current BINANCE_TESTNET setting: {testnet}")
     
     if testnet:
@@ -91,7 +94,7 @@ def main():
 
     # 3. Dry Run configuration
     print_header("3. Dry Run Configuration")
-    dry_run = os.getenv("DRY_RUN", "True").lower() == "true"
+    dry_run = _is_enabled(os.getenv("DRY_RUN", "True"))
     print(f"Current DRY_RUN setting: {dry_run}")
     
     if dry_run:
@@ -112,8 +115,29 @@ def main():
 
     time.sleep(1)
 
-    # 4. Risk Limits
-    print_header("4. Risk Limits Checklist")
+    # 4. Paper Trade configuration
+    print_header("4. Paper Trade Configuration")
+    paper_trade = _is_enabled(os.getenv("PAPER_TRADE", "True"))
+    print(f"Current PAPER_TRADE setting: {paper_trade}")
+
+    if paper_trade:
+        print("⚠️ PAPER_TRADE is enabled. Some bot flows will still simulate trades.")
+        if ask_confirm("Turn OFF Paper Trading mode? (DANGER: real money flow enabled)", default="n"):
+            if ask_confirm("Are you absolutely sure?", default="n"):
+                if env_path:
+                    set_key(env_path, "PAPER_TRADE", "False")
+                    print("✅ Set PAPER_TRADE=False in .env")
+                else:
+                    print("⚠️ Please manually set PAPER_TRADE=False in your .env")
+            else:
+                print("Keeping PAPER_TRADE=True.")
+        else:
+            print("Keeping PAPER_TRADE=True.")
+    else:
+        print("✅ PAPER_TRADE is already disabled.")
+
+    # 5. Risk Limits
+    print_header("5. Risk Limits Checklist")
     print("Before running live, please ensure:")
     print("  [ ] Your Binance account has enough USDT balance.")
     print("  [ ] Your API keys restrict withdrawals (IP-whitelisting recommended).")
@@ -123,7 +147,7 @@ def main():
     
     print_header("Migration Complete")
     print("Please restart your backend server to apply any .env changes.")
-    print("If you changed DRY_RUN or BINANCE_TESTNET, the bot is now live.")
+    print("If you changed PAPER_TRADE, DRY_RUN, or BINANCE_TESTNET, the bot is now live.")
     print("Good luck and trade safe! 📈")
 
 if __name__ == "__main__":

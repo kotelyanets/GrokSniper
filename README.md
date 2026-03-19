@@ -416,8 +416,8 @@ Copy `.env.example` to `.env` and configure the following variables:
 | `TELEGRAM_CHAT_ID` | Target chat ID | — |
 | `ALLOWED_TELEGRAM_ID` | Authorized user ID | — |
 | **Trading** | | |
-| `PAPER_TRADE` | Enable paper trading mode | `True` |
-| `DRY_RUN` | Dry run (no real orders) | `True` |
+| `PAPER_TRADE` | Enable paper trading mode *(must be `False` for live money)* | `True` |
+| `DRY_RUN` | Dry run (no real orders) *(must be `False` for live money)* | `True` |
 | `WATCHLIST` | Comma-separated tickers | `BTC,ETH,SOL,DOGE,XRP` |
 | `SCAN_INTERVAL` | Scan interval in seconds | `900` |
 | `INITIAL_EQUITY` | Starting equity for paper trading | `1000` |
@@ -530,6 +530,7 @@ docker compose logs -f sniper-bot   # Watch live logs
 > - Never trade with capital you cannot afford to lose.
 > - Start with **paper trading mode** (`PAPER_TRADE=True`) to validate strategies before risking real capital.
 > - Use **Binance Testnet** (`BINANCE_TESTNET=True`) for initial testing.
+> - To enable real-money trading, confirm all 3 flags are disabled: `PAPER_TRADE=False`, `DRY_RUN=False`, `BINANCE_TESTNET=False`.
 
 ---
 

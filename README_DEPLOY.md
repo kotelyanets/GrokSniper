@@ -41,7 +41,7 @@ nano .env
 > ```
 > DATABASE_URL=postgresql+asyncpg://groksniper_user:YOUR_PASSWORD@postgres:5432/groksniper
 > ```
-> Also set `BINANCE_TESTNET=False` for live trading.
+> Also set `BINANCE_TESTNET=False`, `DRY_RUN=False`, and `PAPER_TRADE=False` for live trading.
 
 ## 4. Launch the bot
 
