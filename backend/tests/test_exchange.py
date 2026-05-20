@@ -24,17 +24,22 @@ def dry_run_exchange(monkeypatch):
 @pytest.mark.asyncio
 async def test_place_order_dry_run(dry_run_exchange):
     """Test place_order returns mock data in dry run mode."""
-    res = await dry_run_exchange.place_order("BTC", "BUY", 0.5)
-    assert res["status"] == "success"
-    assert res["price"] == 50000.0
-    assert res["amount"] == 0.5
-    assert res["dry_run"] is True
+    with patch.object(dry_run_exchange, "get_price", new_callable=AsyncMock) as mock_price, \
+         patch.object(dry_run_exchange, "_get_best_exchange_for_trade", new_callable=AsyncMock) as mock_route:
+        mock_price.return_value = 50000.0
+        mock_route.return_value = "binance"
+        res = await dry_run_exchange.place_order("BTC", "BUY", 0.5)
+        assert res["status"] == "success"
+        assert res["price"] == 50000.0
+        assert res["amount"] == 0.5
+        assert res["dry_run"] is True
 
 @pytest.mark.asyncio
 async def test_place_order_live_success(active_exchange):
     """Test place_order success path simulating CCXT execution."""
     with patch("backend.src.services.exchange.ccxt.binance") as mock_binance:
         mock_instance = AsyncMock()
+        mock_instance.amount_to_precision = MagicMock(side_effect=lambda symbol, amount: str(amount))
         mock_binance.return_value = mock_instance
         
         # Mock CCXT create_order response
@@ -45,47 +50,55 @@ async def test_place_order_live_success(active_exchange):
             "symbol": "BTC/USDT"
         }
         
-        res = await active_exchange.place_order("BTC", "BUY", 0.5)
-        
-        assert res["status"] == "success"
-        assert res["price"] == 65000.0
-        assert res["amount"] == 0.5
-        assert res["dry_run"] is False
-        mock_instance.close.assert_called_once()  # Ensure cleanup
+        with patch.object(active_exchange, "_get_best_exchange_for_trade", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = "binance"
+            res = await active_exchange.place_order("BTC", "BUY", 0.5)
+            
+            assert res["status"] == "success"
+            assert res["price"] == 65000.0
+            assert res["amount"] == 0.5
+            assert res["dry_run"] is False
+            mock_instance.close.assert_called_once()  # Ensure cleanup
 
 @pytest.mark.asyncio
 async def test_place_order_live_rate_limit(active_exchange):
     """Test place_order gracefully handles CCXT RateLimitExceeded."""
     with patch("backend.src.services.exchange.ccxt.binance") as mock_binance:
         mock_instance = AsyncMock()
+        mock_instance.amount_to_precision = MagicMock(side_effect=lambda symbol, amount: str(amount))
         mock_binance.return_value = mock_instance
         
         # Simulate rate limit error
         mock_instance.create_order.side_effect = ccxt.RateLimitExceeded("Too many requests")
         
-        res = await active_exchange.place_order("ETH", "SELL", 5.0)
-        
-        assert res["status"] == "failed"
-        assert "Too many requests" in res["error"]
-        assert res["dry_run"] is False
-        mock_instance.close.assert_called_once()
+        with patch.object(active_exchange, "_get_best_exchange_for_trade", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = "binance"
+            res = await active_exchange.place_order("ETH", "SELL", 5.0)
+            
+            assert res["status"] == "failed"
+            assert "Too many requests" in res["error"]
+            assert res["dry_run"] is False
+            mock_instance.close.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_place_order_live_network_error(active_exchange):
     """Test place_order gracefully handles CCXT NetworkError."""
     with patch("backend.src.services.exchange.ccxt.binance") as mock_binance:
         mock_instance = AsyncMock()
+        mock_instance.amount_to_precision = MagicMock(side_effect=lambda symbol, amount: str(amount))
         mock_binance.return_value = mock_instance
         
         # Simulate network error
         mock_instance.create_order.side_effect = ccxt.NetworkError("Connection reset by peer")
         
-        res = await active_exchange.place_order("SOL", "BUY", 10.0)
-        
-        assert res["status"] == "failed"
-        assert "Connection reset by peer" in res["error"]
-        assert res["dry_run"] is False
-        mock_instance.close.assert_called_once()
+        with patch.object(active_exchange, "_get_best_exchange_for_trade", new_callable=AsyncMock) as mock_route:
+            mock_route.return_value = "binance"
+            res = await active_exchange.place_order("SOL", "BUY", 10.0)
+            
+            assert res["status"] == "failed"
+            assert "Connection reset by peer" in res["error"]
+            assert res["dry_run"] is False
+            mock_instance.close.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_get_balance_live_success(active_exchange):

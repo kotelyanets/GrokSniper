@@ -66,6 +66,12 @@ async def fetch_ticker_data(
     days: int = 1095,
 ) -> pd.DataFrame:
     """Downloads 4h candles from Binance. Returns cached DataFrame if exists."""
+    # Force a minimum number of days to ensure technical indicators like EMA_200 can be computed
+    if timeframe == "4h":
+        days = max(days, 50)
+    elif timeframe == "1h":
+        days = max(days, 15)
+        
     CACHE_DIR.mkdir(exist_ok=True)
     safe_name = symbol.replace("/", "_")
     cache_file = CACHE_DIR / f"{safe_name}_{timeframe}_{days}d_v2.pkl"
@@ -74,6 +80,57 @@ async def fetch_ticker_data(
         print(f"  [CACHE] Loading {cache_file.name} ...")
         df = pd.read_pickle(cache_file)
         print(f"  [CACHE] {len(df):,} candles loaded")
+        
+        # Robustly ensure all required indicators exist (e.g. if loaded from old cache)
+        required_cols = ["EMA_20", "EMA_50", "EMA_200", "RSI_14", "MACD_12_26_9", "MACDs_12_26_9", "ATRr_14", "VOL_SMA_20"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            print(f"  [CACHE] Missing columns {missing_cols} in cached file, calculating dynamically...")
+            has_timestamp_col = "timestamp" in df.columns
+            if has_timestamp_col:
+                df.set_index("timestamp", inplace=True)
+            
+            # Compute missing indicators with robust length-based fallbacks
+            n_rows = len(df)
+            if "EMA_20" not in df.columns:
+                df.ta.ema(length=min(20, max(2, n_rows // 3)), append=True)
+            if "EMA_50" not in df.columns:
+                df.ta.ema(length=min(50, max(2, n_rows // 3)), append=True)
+            if "EMA_200" not in df.columns:
+                if n_rows >= 200:
+                    df.ta.ema(length=200, append=True)
+                else:
+                    # Fallback if too short
+                    try:
+                        fallback_len = min(50, max(2, n_rows // 3))
+                        df.ta.ema(length=fallback_len, append=True)
+                        fallback_col = f"EMA_{fallback_len}"
+                        if fallback_col in df.columns:
+                            df["EMA_200"] = df[fallback_col]
+                        else:
+                            df["EMA_200"] = df["close"]
+                    except:
+                        df["EMA_200"] = df["close"]
+            if "RSI_14" not in df.columns:
+                df.ta.rsi(length=min(14, max(2, n_rows // 3)), append=True)
+            if "MACD_12_26_9" not in df.columns or "MACDs_12_26_9" not in df.columns:
+                if n_rows >= 26:
+                    df.ta.macd(fast=12, slow=26, signal=9, append=True)
+                else:
+                    df["MACD_12_26_9"] = 0.0
+                    df["MACDs_12_26_9"] = 0.0
+            if "ATRr_14" not in df.columns:
+                df.ta.atr(length=min(14, max(2, n_rows // 3)), append=True)
+            if "VOL_SMA_20" not in df.columns:
+                df["VOL_SMA_20"] = df["volume"].rolling(window=min(20, max(2, n_rows // 3))).mean()
+            
+            df.dropna(inplace=True)
+            if has_timestamp_col:
+                df.reset_index(inplace=True)
+                
+            df.to_pickle(cache_file)
+            print(f"  [CACHE] Re-saved updated {cache_file.name}")
+            
         return df
 
     exchange = ccxt.binance({"enableRateLimit": True})
@@ -127,14 +184,33 @@ async def fetch_ticker_data(
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
 
-        # TA indicators
-        df.ta.ema(length=20, append=True)
-        df.ta.ema(length=50, append=True)
-        df.ta.ema(length=200, append=True)  # Added for BTC Health Guard
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        df.ta.atr(length=14, append=True)
-        df["VOL_SMA_20"] = df["volume"].rolling(window=20).mean()
+        # TA indicators with robust length-based fallbacks
+        n_rows = len(df)
+        df.ta.ema(length=min(20, max(2, n_rows // 3)), append=True)
+        df.ta.ema(length=min(50, max(2, n_rows // 3)), append=True)
+        if n_rows >= 200:
+            df.ta.ema(length=200, append=True)  # Added for BTC Health Guard
+        else:
+            try:
+                fallback_len = min(50, max(2, n_rows // 3))
+                df.ta.ema(length=fallback_len, append=True)
+                fallback_col = f"EMA_{fallback_len}"
+                if fallback_col in df.columns:
+                    df["EMA_200"] = df[fallback_col]
+                else:
+                    df["EMA_200"] = df["close"]
+            except:
+                df["EMA_200"] = df["close"]
+                
+        df.ta.rsi(length=min(14, max(2, n_rows // 3)), append=True)
+        if n_rows >= 26:
+            df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        else:
+            df["MACD_12_26_9"] = 0.0
+            df["MACDs_12_26_9"] = 0.0
+            
+        df.ta.atr(length=min(14, max(2, n_rows // 3)), append=True)
+        df["VOL_SMA_20"] = df["volume"].rolling(window=min(20, max(2, n_rows // 3))).mean()
         df.dropna(inplace=True)
         df.reset_index(inplace=True)
 

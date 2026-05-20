@@ -35,6 +35,10 @@ from backend.src.services.telegram_bot import send_telegram_message, send_exit_a
 
 logger = logging.getLogger("groksniper.ws")
 
+# Trailing stop parameters (configurable via .env)
+_TRAIL_ACTIVATION_PCT = float(os.getenv("TRAIL_ACTIVATION_PCT", "5.4")) / 100  # e.g. 1.054
+_TRAIL_STEP_PCT       = float(os.getenv("TRAIL_STEP_PCT",       "0.3"))  / 100  # e.g. 0.003
+
 # Shared exchange instance (re-uses the same one as server.py if possible,
 # but we create a dedicated instance here so this module is self-contained).
 _exchange = CryptoExchange()
@@ -182,162 +186,203 @@ async def _watch_trade(trade_id: str) -> None:
     )
 
     # Track whether we already sent the trailing-stop activation alert
+    trail_activation = 1.0 + _TRAIL_ACTIVATION_PCT  # e.g. 1.054
+    trail_step        = 1.0 - _TRAIL_STEP_PCT         # e.g. 0.997
     if side == "SHORT":
-        trailing_activated = lowest_price <= entry_price * 0.946
+        trailing_activated = lowest_price <= entry_price * (1.0 - _TRAIL_ACTIVATION_PCT)
     else:
-        trailing_activated = highest_price >= entry_price * 1.054
+        trailing_activated = highest_price >= entry_price * trail_activation
+
+    last_written_peak = highest_price
+    last_written_trough = lowest_price
+
+    async def _process_tick_logic(price: float) -> bool:
+        nonlocal highest_price, lowest_price, trailing_activated, last_written_peak, last_written_trough
+        
+        # ══════════════════════════════════════════════════════════
+        # LONG PATH
+        # ══════════════════════════════════════════════════════════
+        if side == "LONG":
+            # ── Update running peak ───────────────────────────────
+            if price > highest_price:
+                highest_price = price
+                price_diff_pct = ((price - last_written_peak) / last_written_peak) * 100
+                if price_diff_pct >= 0.05:
+                    last_written_peak = price
+                    asyncio.create_task(_update_peak(trade_id, price))
+
+            # ── Trailing Stop Activation Alert ────────────────────
+            if not trailing_activated and highest_price >= entry_price * trail_activation:
+                trailing_activated = True
+                pnl_now = ((price - entry_price) / entry_price) * 100
+                trail_trigger_price = highest_price * trail_step
+                trail_msg = (
+                    f"🔒 <b>TRAILING STOP АКТИВИРОВАН</b>\n\n"
+                    f"<b>Тикер:</b> #{ticker}\n"
+                    f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
+                    f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
+                    f"<b>Пик:</b> ${highest_price:,.4f}\n"
+                    f"<b>Trail trigger:</b> ${trail_trigger_price:,.4f} ({_TRAIL_STEP_PCT*100:.1f}% от пика)\n\n"
+                    f"Позиция переведена в безубыток. Стоп ползет за ценой!\n"
+                    f"Ловим гипер-тренд 🚀"
+                )
+                asyncio.create_task(send_telegram_message(trail_msg))
+                logger.info(f"[WS] Trailing stop activated for {ticker} at ${price:,.4f} (activation={_TRAIL_ACTIVATION_PCT*100:.1f}%)")
+
+            # ── EXIT CONDITIONS (priority order) ──────────────────
+            exit_reason: str | None = None
+            exit_label:  str       = ""
+
+            # 1. Hard Stop-Loss: ATR-based dynamic stop (replaces hardcoded -3%)
+            if price <= dynamic_sl:
+                sl_pct = ((entry_price - dynamic_sl) / entry_price) * 100
+                exit_reason = "hard_stop"
+                exit_label  = (
+                    f"Dynamic Stop-Loss (ATR | entry ${entry_price:,.4f} → "
+                    f"stop ${dynamic_sl:,.4f}, -{sl_pct:.1f}%)"
+                )
+
+            # 2. Delayed Trailing Stop: activates only after +TRAIL_ACTIVATION_PCT profit
+            elif highest_price >= entry_price * trail_activation:
+                trailing_trigger = highest_price * trail_step
+                if price <= trailing_trigger:
+                    exit_reason = "trailing_stop"
+                    exit_label  = (
+                        f"Delayed Trailing Stop (-0.3% from peak "
+                        f"${highest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
+                    )
+
+            if exit_reason:
+                async with AsyncSessionLocal() as session:
+                    res = await session.execute(
+                        select(Trade).where(Trade.id == trade_id)  # type: ignore[arg-type]
+                    )
+                    db_trade = res.scalar_one_or_none()
+                    if db_trade is None or db_trade.is_closed:
+                        logger.info(f"[WS] {ticker} already closed externally — skipping.")
+                        return True
+
+                await _close_position(
+                    trade=trade,
+                    exit_reason=exit_reason,
+                    exit_label=exit_label,
+                    entry_price=entry_price,
+                    highest_price=highest_price,
+                    side="LONG",
+                    lowest_price=price, # Pass current price to close_position for paper mode
+                )
+                return True
+
+        # ══════════════════════════════════════════════════════════
+        # SHORT PATH (Phase 30)
+        # ══════════════════════════════════════════════════════════
+        else:
+            # ── Update running trough (lowest price) ──────────────
+            if price < lowest_price:
+                lowest_price = price
+                price_diff_pct = ((last_written_trough - price) / last_written_trough) * 100
+                if price_diff_pct >= 0.05:
+                    last_written_trough = price
+                    asyncio.create_task(_update_trough(trade_id, price))
+
+            # ── Trailing Stop Activation Alert (SHORT) ────────────
+            if not trailing_activated and lowest_price <= entry_price * 0.946:
+                trailing_activated = True
+                pnl_now = ((entry_price - price) / entry_price) * 100
+                trail_msg = (
+                    f"🔒 <b>SHORT TRAILING STOP АКТИВИРОВАН</b>\n\n"
+                    f"<b>Тикер:</b> #{ticker}\n"
+                    f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
+                    f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
+                    f"<b>Минимум:</b> ${lowest_price:,.4f}\n"
+                    f"<b>Trail trigger:</b> ${lowest_price * 1.003:,.4f}\n\n"
+                    f"SHORT переведен в безубыток. Стоп ползет за ценой!\n"
+                    f"Ловим гипер-тренд 🚀"
+                )
+                asyncio.create_task(send_telegram_message(trail_msg))
+                logger.info(f"[WS] SHORT trailing stop activated for {ticker} at ${price:,.4f}")
+
+            # ── SHORT EXIT CONDITIONS (priority order) ────────────
+            exit_reason: str | None = None
+            exit_label:  str       = ""
+
+            # 1. Hard Stop-Loss: ATR-based dynamic stop (replaces hardcoded +3%)
+            if price >= dynamic_sl:
+                sl_pct = ((dynamic_sl - entry_price) / entry_price) * 100
+                exit_reason = "hard_stop"
+                exit_label  = (
+                    f"SHORT Dynamic Stop (ATR | entry ${entry_price:,.4f} → "
+                    f"stop ${dynamic_sl:,.4f}, +{sl_pct:.1f}%)"
+                )
+
+            # 2. Delayed Trailing Stop: activates after -TRAIL_ACTIVATION_PCT profit for SHORT
+            elif lowest_price <= entry_price * (1.0 - _TRAIL_ACTIVATION_PCT):
+                trailing_trigger = lowest_price * (1.0 + _TRAIL_STEP_PCT)
+                if price >= trailing_trigger:
+                    exit_reason = "trailing_stop"
+                    exit_label  = (
+                        f"SHORT Trailing Stop (+0.3% from trough "
+                        f"${lowest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
+                    )
+
+            if exit_reason:
+                async with AsyncSessionLocal() as session:
+                    res = await session.execute(
+                        select(Trade).where(Trade.id == trade_id)  # type: ignore[arg-type]
+                    )
+                    db_trade = res.scalar_one_or_none()
+                    if db_trade is None or db_trade.is_closed:
+                        logger.info(f"[WS] {ticker} SHORT already closed externally — skipping.")
+                        return True
+
+                await _close_position(
+                    trade=trade,
+                    exit_reason=exit_reason,
+                    exit_label=exit_label,
+                    entry_price=entry_price,
+                    highest_price=price, # Pass current price to close_position for paper mode
+                    side="SHORT",
+                    lowest_price=lowest_price,
+                )
+                return True
+
+        return False
 
     try:
-        async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
-            async for raw_msg in ws:
-                try:
-                    msg  = json.loads(raw_msg)
-                    price = float(msg.get("p", 0))   # "p" = price in @trade stream
-                    if price == 0:
+        ws_connected = True
+        try:
+            async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
+                async for raw_msg in ws:
+                    try:
+                        msg  = json.loads(raw_msg)
+                        price = float(msg.get("p", 0))   # "p" = price in @trade stream
+                        if price == 0:
+                            continue
+                    except (json.JSONDecodeError, ValueError):
                         continue
-                except (json.JSONDecodeError, ValueError):
-                    continue
 
-                # ══════════════════════════════════════════════════════════
-                # LONG PATH
-                # ══════════════════════════════════════════════════════════
-                if side == "LONG":
-                    # ── Update running peak ───────────────────────────────
-                    if price > highest_price:
-                        highest_price = price
-                        asyncio.create_task(_update_peak(trade_id, highest_price))
-
-                    # ── Trailing Stop Activation Alert ────────────────────
-                    if not trailing_activated and highest_price >= entry_price * 1.054:
-                        trailing_activated = True
-                        pnl_now = ((price - entry_price) / entry_price) * 100
-                        trail_msg = (
-                            f"🔒 <b>TRAILING STOP АКТИВИРОВАН</b>\n\n"
-                            f"<b>Тикер:</b> #{ticker}\n"
-                            f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
-                            f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
-                            f"<b>Пик:</b> ${highest_price:,.4f}\n"
-                            f"<b>Trail trigger:</b> ${highest_price * 0.997:,.4f}\n\n"
-                            f"Позиция переведена в безубыток. Стоп ползет за ценой!\n"
-                            f"Ловим гипер-тренд 🚀"
-                        )
-                        asyncio.create_task(send_telegram_message(trail_msg))
-                        logger.info(f"[WS] Trailing stop activated for {ticker} at ${price:,.4f}")
-
-                    # ── EXIT CONDITIONS (priority order) ──────────────────
-                    exit_reason: str | None = None
-                    exit_label:  str       = ""
-
-                    # 1. Hard Stop-Loss: ATR-based dynamic stop (replaces hardcoded -3%)
-                    if price <= dynamic_sl:
-                        sl_pct = ((entry_price - dynamic_sl) / entry_price) * 100
-                        exit_reason = "hard_stop"
-                        exit_label  = (
-                            f"Dynamic Stop-Loss (ATR | entry ${entry_price:,.4f} → "
-                            f"stop ${dynamic_sl:,.4f}, -{sl_pct:.1f}%)"
-                        )
-
-                    # 2. Delayed Trailing Stop: activates only after +5.4% profit
-                    elif highest_price >= entry_price * 1.054:
-                        trailing_trigger = highest_price * 0.997
-                        if price <= trailing_trigger:
-                            exit_reason = "trailing_stop"
-                            exit_label  = (
-                                f"Delayed Trailing Stop (-0.3% from peak "
-                                f"${highest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
-                            )
-
-                    if exit_reason:
-                        async with AsyncSessionLocal() as session:
-                            res = await session.execute(
-                                select(Trade).where(Trade.id == trade_id)  # type: ignore[arg-type]
-                            )
-                            db_trade = res.scalar_one_or_none()
-                            if db_trade is None or db_trade.is_closed:
-                                logger.info(f"[WS] {ticker} already closed externally — skipping.")
-                                return
-
-                        await _close_position(
-                            trade=trade,
-                            exit_reason=exit_reason,
-                            exit_label=exit_label,
-                            entry_price=entry_price,
-                            highest_price=highest_price,
-                            side="LONG",
-                            lowest_price=price, # Pass current price to close_position for paper mode
-                        )
+                    exit_fired = await _process_tick_logic(price)
+                    if exit_fired:
                         return
+        except Exception as ws_err:
+            logger.warning(f"[WS] WebSocket disconnected/failed for {ticker}: {ws_err}. Switching to REST polling fallback.")
+            ws_connected = False
 
-                # ══════════════════════════════════════════════════════════
-                # SHORT PATH (Phase 30)
-                # ══════════════════════════════════════════════════════════
-                else:
-                    # ── Update running trough (lowest price) ──────────────
-                    if price < lowest_price:
-                        lowest_price = price
-                        asyncio.create_task(_update_trough(trade_id, lowest_price))
-
-                    # ── Trailing Stop Activation Alert (SHORT) ────────────
-                    if not trailing_activated and lowest_price <= entry_price * 0.946:
-                        trailing_activated = True
-                        pnl_now = ((entry_price - price) / entry_price) * 100
-                        trail_msg = (
-                            f"🔒 <b>SHORT TRAILING STOP АКТИВИРОВАН</b>\n\n"
-                            f"<b>Тикер:</b> #{ticker}\n"
-                            f"<b>Цена входа:</b> ${entry_price:,.4f}\n"
-                            f"<b>Текущая цена:</b> ${price:,.4f} ({pnl_now:+.2f}%)\n"
-                            f"<b>Минимум:</b> ${lowest_price:,.4f}\n"
-                            f"<b>Trail trigger:</b> ${lowest_price * 1.003:,.4f}\n\n"
-                            f"SHORT переведен в безубыток. Стоп ползет за ценой!\n"
-                            f"Ловим гипер-тренд 🚀"
-                        )
-                        asyncio.create_task(send_telegram_message(trail_msg))
-                        logger.info(f"[WS] SHORT trailing stop activated for {ticker} at ${price:,.4f}")
-
-                    # ── SHORT EXIT CONDITIONS (priority order) ────────────
-                    exit_reason: str | None = None
-                    exit_label:  str       = ""
-
-                    # 1. Hard Stop-Loss: ATR-based dynamic stop (replaces hardcoded +3%)
-                    if price >= dynamic_sl:
-                        sl_pct = ((dynamic_sl - entry_price) / entry_price) * 100
-                        exit_reason = "hard_stop"
-                        exit_label  = (
-                            f"SHORT Dynamic Stop (ATR | entry ${entry_price:,.4f} → "
-                            f"stop ${dynamic_sl:,.4f}, +{sl_pct:.1f}%)"
-                        )
-
-                    # 2. Delayed Trailing Stop: activates after -5.4% profit for SHORT
-                    elif lowest_price <= entry_price * 0.946:
-                        trailing_trigger = lowest_price * 1.003
-                        if price >= trailing_trigger:
-                            exit_reason = "trailing_stop"
-                            exit_label  = (
-                                f"SHORT Trailing Stop (+0.3% from trough "
-                                f"${lowest_price:,.4f}, trigger=${trailing_trigger:,.4f})"
-                            )
-
-                    if exit_reason:
-                        async with AsyncSessionLocal() as session:
-                            res = await session.execute(
-                                select(Trade).where(Trade.id == trade_id)  # type: ignore[arg-type]
-                            )
-                            db_trade = res.scalar_one_or_none()
-                            if db_trade is None or db_trade.is_closed:
-                                logger.info(f"[WS] {ticker} SHORT already closed externally — skipping.")
-                                return
-
-                        await _close_position(
-                            trade=trade,
-                            exit_reason=exit_reason,
-                            exit_label=exit_label,
-                            entry_price=entry_price,
-                            highest_price=price, # Pass current price to close_position for paper mode
-                            side="SHORT",
-                            lowest_price=lowest_price,
-                        )
-                        return  # BUY to close executed — task done
-
+        if not ws_connected:
+            # REST polling fallback loop
+            while True:
+                await asyncio.sleep(5)
+                try:
+                    price = await _exchange.get_price(ticker)
+                    if price <= 0:
+                        logger.warning(f"[WS FALLBACK] Fetched invalid price {price} for {ticker}")
+                        continue
+                    logger.debug(f"[WS FALLBACK] Polled price for {ticker}: ${price:,.4f}")
+                    exit_fired = await _process_tick_logic(price)
+                    if exit_fired:
+                        return
+                except Exception as rest_err:
+                    logger.error(f"[WS FALLBACK] REST polling error for {ticker}: {rest_err}")
     except asyncio.CancelledError:
         logger.info(f"[WS] Watcher for {ticker} ({trade_id}) cancelled.")
     except Exception as e:

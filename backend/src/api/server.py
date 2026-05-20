@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from backend.src.api.automation import _automation_loop, _portfolio_summary_loop
+from backend.src.api.automation import _automation_loop, _portfolio_summary_loop, _ml_training_loop, _pnl_heartbeat_loop
 from backend.src.api.routes import router
 from backend.src.api.state import WATCHLIST
 from backend.src.db.database import Base, engine
@@ -33,6 +33,8 @@ from backend.src.services.telegram_listener import (
     stop_telegram_listener,
 )
 from backend.src.services.ws_manager import cancel_all_watchers, monitor_open_positions_ws
+from backend.src.services.paper_trade_closer import paper_trade_closer_loop
+from backend.src.services.position_reconciler import reconcile_positions_loop
 
 from datetime import datetime
 
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE trades ADD COLUMN position_size_usdt FLOAT",
         "ALTER TABLE news_logs ADD COLUMN micro_features TEXT",
         "ALTER TABLE paper_trades ADD COLUMN ai_reasoning TEXT",
+        "ALTER TABLE paper_trades ADD COLUMN analysis_report TEXT",
     ]
     for sql in _migrations:
         try:
@@ -110,6 +113,13 @@ async def lifespan(app: FastAPI):
     auto_task    = asyncio.create_task(_automation_loop(),          name="automation_loop")
     ws_task      = asyncio.create_task(monitor_open_positions_ws(), name="ws_position_monitor")
     summary_task = asyncio.create_task(_portfolio_summary_loop(),   name="portfolio_summary")
+    ml_train_task = asyncio.create_task(_ml_training_loop(),        name="ml_training_loop")
+    paper_closer_task = asyncio.create_task(paper_trade_closer_loop(), name="paper_closer")
+    reconciler_task   = asyncio.create_task(reconcile_positions_loop(), name="reconciler")
+    heartbeat_task    = asyncio.create_task(_pnl_heartbeat_loop(),      name="pnl_heartbeat")
+    
+    _background_tasks = [auto_task, ws_task, summary_task, ml_train_task, paper_closer_task, reconciler_task, heartbeat_task]
+    
     logger.info("All background tasks started.")
     logger.info("Live Engine: ATR SL | No Hard TP | 2% Trail Activation.")
 
@@ -126,14 +136,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    for task in (auto_task, ws_task, summary_task):
+    for task in _background_tasks:
         task.cancel()
     cancel_all_watchers()
 
     if tg_app:
         await stop_telegram_listener(tg_app)
 
-    for task in (auto_task, ws_task, summary_task):
+    for task in _background_tasks:
         try:
             await task
         except asyncio.CancelledError:

@@ -62,7 +62,14 @@ export default function AnalysisPage() {
     const fetchNews = useCallback(async () => {
         setError(null);
         try {
-            const res = await fetch(`${API}/api/news`);
+            const res = await fetch(`${API}/api/news?t=${Date.now()}`, {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            });
             if (!res.ok) throw new Error("API error");
             setNews(await res.json());
         } catch {

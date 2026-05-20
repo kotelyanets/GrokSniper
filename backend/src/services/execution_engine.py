@@ -30,6 +30,7 @@ import os
 import time
 
 import ccxt.async_support as ccxt
+from ccxt import InsufficientFunds, InvalidOrder, RateLimitExceeded, NetworkError, ExchangeError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -114,6 +115,14 @@ async def execute_sniper_order(
     exchange = _make_exchange()
 
     try:
+        # ── 0. Load markets for precision and metadata ──────────────────────
+        await exchange.load_markets()
+
+        # Enforce strict amount rounding using exchange.amount_to_precision()
+        amount = float(exchange.amount_to_precision(symbol, amount))
+        if amount <= 0:
+            raise ValueError(f"Amount rounded to zero by exchange precision rules: {amount}")
+
         # ── 1. Fetch order book (top 5 levels) ─────────────────────────────
         order_book = await exchange.fetch_order_book(symbol, limit=5)
         bids = order_book.get("bids", [])   # [[price, qty], ...]
@@ -131,9 +140,9 @@ async def execute_sniper_order(
         tick = await _get_tick_size(exchange, symbol)
 
         if side == "buy":
-            limit_price = round(best_bid + tick, 8)   # one tick above best bid
+            limit_price = float(exchange.price_to_precision(symbol, best_bid + tick))
         else:
-            limit_price = round(best_ask - tick, 8)   # one tick below best ask
+            limit_price = float(exchange.price_to_precision(symbol, best_ask - tick))
 
         logger.info(
             f"[SNIPER] {symbol} {side.upper()} | Bid={best_bid} Ask={best_ask} "
@@ -192,44 +201,48 @@ async def execute_sniper_order(
                 pass
 
             already_filled = float(final_order.get("filled") or 0)
-            remaining      = round(amount - already_filled, 8)
+            remaining      = amount - already_filled
 
             if remaining > 0:
-                logger.info(
-                    f"[SNIPER FALLBACK] Placing MARKET {side.upper()} for remaining "
-                    f"{remaining:.6f} {symbol}"
-                )
-                market_order = await exchange.create_order(
-                    symbol=symbol,
-                    type="market",
-                    side=side,
-                    amount=remaining,
-                )
-                # Merge fill data
-                market_filled = float(market_order.get("filled") or remaining)
-                market_price  = float(
-                    market_order.get("average")
-                    or market_order.get("price")
-                    or limit_price
-                )
-
-                # Compute blended average fill price
-                total_filled = already_filled + market_filled
-                if total_filled > 0:
-                    blended_price = (
-                        (already_filled * limit_price + market_filled * market_price)
-                        / total_filled
+                remaining_formatted = float(exchange.amount_to_precision(symbol, remaining))
+                if remaining_formatted > 0:
+                    logger.info(
+                        f"[SNIPER FALLBACK] Placing MARKET {side.upper()} for remaining "
+                        f"{remaining_formatted:.6f} {symbol}"
                     )
-                else:
-                    blended_price = market_price
+                    market_order = await exchange.create_order(
+                        symbol=symbol,
+                        type="market",
+                        side=side,
+                        amount=remaining_formatted,
+                    )
+                    # Merge fill data
+                    market_filled = float(market_order.get("filled") or remaining_formatted)
+                    market_price  = float(
+                        market_order.get("average")
+                        or market_order.get("price")
+                        or limit_price
+                    )
 
-                exec_style = "FALLBACK_TO_MARKET"
-                final_order = {
-                    **final_order,
-                    "filled":  total_filled,
-                    "average": blended_price,
-                    "status":  "closed",
-                }
+                    # Compute blended average fill price
+                    total_filled = already_filled + market_filled
+                    if total_filled > 0:
+                        blended_price = (
+                            (already_filled * limit_price + market_filled * market_price)
+                            / total_filled
+                        )
+                    else:
+                        blended_price = market_price
+
+                    exec_style = "FALLBACK_TO_MARKET"
+                    final_order = {
+                        **final_order,
+                        "filled":  total_filled,
+                        "average": blended_price,
+                        "status":  "closed",
+                    }
+                else:
+                    logger.warning(f"[SNIPER FALLBACK] Remaining size {remaining} rounded to 0 under exchange precision rules.")
 
         # ── Build result ────────────────────────────────────────────────────
         avg_price  = float(final_order.get("average") or final_order.get("price") or limit_price)
@@ -251,6 +264,66 @@ async def execute_sniper_order(
             "error":      None,
         }
 
+    except InsufficientFunds as e:
+        logger.error(f"[SNIPER] CCXT Insufficient Funds for {symbol} {side}: {e}")
+        return {
+            "status":     "failed",
+            "exec_style": "FAILED",
+            "price":      0.0,
+            "amount":     0.0,
+            "fills":      [],
+            "ticker":     ticker,
+            "side":       side,
+            "error":      f"InsufficientFunds: {e}",
+        }
+    except InvalidOrder as e:
+        logger.error(f"[SNIPER] CCXT Invalid Order for {symbol} {side}: {e}")
+        return {
+            "status":     "failed",
+            "exec_style": "FAILED",
+            "price":      0.0,
+            "amount":     0.0,
+            "fills":      [],
+            "ticker":     ticker,
+            "side":       side,
+            "error":      f"InvalidOrder: {e}",
+        }
+    except RateLimitExceeded as e:
+        logger.error(f"[SNIPER] CCXT Rate Limit Exceeded for {symbol} {side}: {e}")
+        return {
+            "status":     "failed",
+            "exec_style": "FAILED",
+            "price":      0.0,
+            "amount":     0.0,
+            "fills":      [],
+            "ticker":     ticker,
+            "side":       side,
+            "error":      f"RateLimitExceeded: {e}",
+        }
+    except NetworkError as e:
+        logger.error(f"[SNIPER] CCXT Network Error for {symbol} {side}: {e}")
+        return {
+            "status":     "failed",
+            "exec_style": "FAILED",
+            "price":      0.0,
+            "amount":     0.0,
+            "fills":      [],
+            "ticker":     ticker,
+            "side":       side,
+            "error":      f"NetworkError: {e}",
+        }
+    except ExchangeError as e:
+        logger.error(f"[SNIPER] CCXT Exchange Error for {symbol} {side}: {e}")
+        return {
+            "status":     "failed",
+            "exec_style": "FAILED",
+            "price":      0.0,
+            "amount":     0.0,
+            "fills":      [],
+            "ticker":     ticker,
+            "side":       side,
+            "error":      f"ExchangeError: {e}",
+        }
     except Exception as e:
         logger.error(f"[SNIPER] Critical failure for {symbol} {side}: {e}", exc_info=True)
         return {

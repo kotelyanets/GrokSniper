@@ -12,8 +12,8 @@ export default function WinRateChart({ totalTrades, winRate }: WinRateChartProps
     const data = useMemo(() => {
         if (totalTrades === 0) {
             return [
-                { name: "Profit", value: 0, color: "#22c55e" },
-                { name: "Loss", value: 0, color: "#ef4444" },
+                { name: "Profit", value: 0, color: "#10b981" },
+                { name: "Loss", value: 0, color: "#f43f5e" },
             ];
         }
         const wins_pct = winRate / 100;
@@ -21,8 +21,8 @@ export default function WinRateChart({ totalTrades, winRate }: WinRateChartProps
         const losses = totalTrades - wins;
 
         return [
-            { name: "Profit", value: wins, color: "#22c55e" },
-            { name: "Loss", value: losses, color: "#ef4444" },
+            { name: "Profit", value: wins, color: "#10b981" },
+            { name: "Loss", value: losses, color: "#f43f5e" },
         ];
     }, [totalTrades]);
 
@@ -30,26 +30,16 @@ export default function WinRateChart({ totalTrades, winRate }: WinRateChartProps
         <div style={{ width: "100%", height: "100%", position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                    <defs>
-                        <filter id="glowGreen" x="-20%" y="-20%" width="140%" height="140%">
-                            <feGaussianBlur stdDeviation="6" result="blur" />
-                            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                        </filter>
-                        <filter id="glowRed" x="-20%" y="-20%" width="140%" height="140%">
-                            <feGaussianBlur stdDeviation="6" result="blur" />
-                            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                        </filter>
-                    </defs>
                     <Tooltip
                         contentStyle={{
-                            backgroundColor: "rgba(8,11,15,0.9)",
-                            border: "1px solid rgba(255,255,255,0.1)",
+                            backgroundColor: "rgba(9, 9, 11, 0.95)",
+                            border: "1px solid rgba(255, 255, 255, 0.08)",
                             borderRadius: "8px",
                             fontFamily: "var(--font-jetbrains)",
                             fontSize: "11px",
-                            color: "#e8edf2"
+                            color: "#d4d4d8"
                         }}
-                        itemStyle={{ color: "#e8edf2" }}
+                        itemStyle={{ color: "#fafafa" }}
                     />
                     <Pie
                         data={data}
@@ -66,7 +56,6 @@ export default function WinRateChart({ totalTrades, winRate }: WinRateChartProps
                             <Cell
                                 key={`cell-${index}`}
                                 fill={entry.color}
-                                style={{ filter: entry.name === "Profit" ? "url(#glowGreen)" : "url(#glowRed)" }}
                             />
                         ))}
                     </Pie>

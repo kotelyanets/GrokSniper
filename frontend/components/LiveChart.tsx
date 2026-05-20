@@ -40,32 +40,32 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
         const chart = createChart(chartContainerRef.current, {
             layout: {
                 background: { type: ColorType.Solid, color: "transparent" },
-                textColor: "#8f9bb3",
+                textColor: "#71717a",
             },
             grid: {
-                vertLines: { color: "rgba(42, 46, 57, 0.4)" },
-                horzLines: { color: "rgba(42, 46, 57, 0.4)" },
+                vertLines: { color: "rgba(255, 255, 255, 0.04)" },
+                horzLines: { color: "rgba(255, 255, 255, 0.04)" },
             },
             rightPriceScale: {
-                borderColor: "rgba(42, 46, 57, 0.8)",
+                borderColor: "rgba(255, 255, 255, 0.06)",
             },
             timeScale: {
-                borderColor: "rgba(42, 46, 57, 0.8)",
+                borderColor: "rgba(255, 255, 255, 0.06)",
                 timeVisible: true,
                 secondsVisible: false,
             },
             crosshair: {
                 vertLine: {
-                    color: "#8f9bb3",
+                    color: "#52525b",
                     width: 1,
                     style: 3,
-                    labelBackgroundColor: "#8f9bb3",
+                    labelBackgroundColor: "#27272a",
                 },
                 horzLine: {
-                    color: "#8f9bb3",
+                    color: "#52525b",
                     width: 1,
                     style: 3,
-                    labelBackgroundColor: "#8f9bb3",
+                    labelBackgroundColor: "#27272a",
                 },
             },
         });
@@ -74,11 +74,11 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
 
         // @ts-ignore
         const candlestickSeries = chart.addSeries(CandlestickSeries, {
-            upColor: "#22c55e",
-            downColor: "#ef4444",
+            upColor: "#10b981",
+            downColor: "#f43f5e",
             borderVisible: false,
-            wickUpColor: "#22c55e",
-            wickDownColor: "#ef4444",
+            wickUpColor: "#10b981",
+            wickDownColor: "#f43f5e",
         });
         
         seriesRef.current = candlestickSeries;
@@ -131,7 +131,7 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
                         markers.push({
                             time: tradeTime,
                             position: "belowBar",
-                            color: "#00d4ff",
+                            color: "#10b981",
                             shape: "arrowUp",
                             text: `LONG @ $${trade.price.toFixed(2)}`,
                             size: 2
@@ -140,7 +140,7 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
                         markers.push({
                             time: tradeTime,
                             position: "aboveBar",
-                            color: "#ef4444",
+                            color: "#f43f5e",
                             shape: "arrowDown",
                             text: `SHORT @ $${trade.price.toFixed(2)}`,
                             size: 2
@@ -151,7 +151,7 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
                         markers.push({
                             time: Math.floor(new Date(trade.updated_at).getTime() / 1000) as Time,
                             position: trade.action === "LONG" ? "aboveBar" : "belowBar",
-                            color: trade.pnl_usdt && trade.pnl_usdt > 0 ? "#22c55e" : "#fbbf24",
+                            color: trade.pnl_usdt && trade.pnl_usdt > 0 ? "#10b981" : "#f59e0b",
                             shape: "circle",
                             text: `EXIT ${trade.pnl_usdt && trade.pnl_usdt > 0 ? "+" : ""}$${trade.pnl_usdt?.toFixed(2)}`,
                             size: 1
@@ -193,14 +193,14 @@ const LiveChart = memo(function LiveChart({ trades }: LiveChartProps) {
                         onClick={() => setSymbol(sym)}
                         style={{
                             padding: "4px 8px",
-                            background: symbol === sym ? "rgba(0, 212, 255, 0.15)" : "var(--bg-card)",
-                            border: `1px solid ${symbol === sym ? "var(--cyan)" : "var(--border)"}`,
-                            color: symbol === sym ? "var(--cyan)" : "var(--text-muted)",
+                            background: symbol === sym ? "rgba(255, 255, 255, 0.08)" : "rgba(24, 24, 27, 0.5)",
+                            border: `1px solid ${symbol === sym ? "rgba(255, 255, 255, 0.15)" : "rgba(255, 255, 255, 0.06)"}`,
+                            color: symbol === sym ? "#fafafa" : "#52525b",
                             borderRadius: "4px",
                             fontFamily: "var(--font-jetbrains)",
                             fontSize: "11px",
                             cursor: "pointer",
-                            transition: "all 0.2s"
+                            transition: "all 0.15s ease"
                         }}
                     >
                         {sym.replace("USDT", "")}

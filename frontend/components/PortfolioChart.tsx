@@ -37,27 +37,27 @@ export default function PortfolioChart({ currentBalance, equityCurve }: Portfoli
                 <AreaChart data={data} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                     <defs>
                         <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#00d4ff" stopOpacity={0.4} />
-                            <stop offset="95%" stopColor="#00d4ff" stopOpacity={0.0} />
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
                         </linearGradient>
                     </defs>
                     <Tooltip
                         contentStyle={{
-                            backgroundColor: "rgba(8,11,15,0.9)",
-                            border: "1px solid rgba(0,212,255,0.2)",
+                            backgroundColor: "rgba(9, 9, 11, 0.95)",
+                            border: "1px solid rgba(255, 255, 255, 0.08)",
                             borderRadius: "8px",
                             fontFamily: "var(--font-jetbrains)",
                             fontSize: "11px",
-                            color: "#00d4ff"
+                            color: "#d4d4d8"
                         }}
-                        itemStyle={{ color: "#e8edf2" }}
+                        itemStyle={{ color: "#fafafa" }}
                         formatter={(value: any) => [`$${Number(value).toFixed(2)}`, "Balance"]}
                         labelFormatter={() => ""}
                     />
                     <Area
                         type="monotone"
                         dataKey="value"
-                        stroke="#00d4ff"
+                        stroke="#10b981"
                         strokeWidth={2}
                         fillOpacity={1}
                         fill="url(#colorValue)"

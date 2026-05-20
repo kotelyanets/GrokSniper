@@ -1,12 +1,12 @@
 import os
 import json
 import logging
-from anthropic import AsyncAnthropic
+from groq import AsyncGroq
 
 logger = logging.getLogger("groksniper.agents.quant")
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = "llama-3.3-70b-versatile"
 CONFIDENCE_THRESHOLD = int(os.getenv("CONFIDENCE_THRESHOLD", "60"))
 
 QUANT_SYSTEM_PROMPT = """You are the Lead Quant Analyst for a crypto hedge fund.
@@ -19,6 +19,10 @@ For each ticker, if the technical setup shows ANY directional bias, propose 'LON
 Only output 'HOLD' if the chart is truly directionless/choppy with no identifiable setup.
 
 IMPORTANT POSITION SIZING: Dynamically calculate your `position_size_pct` based on the provided ATR (Average True Range) volatility. If ATR is high (market is highly volatile, requiring wide stops), reduce your position size % to limit absolute dollar risk. If ATR is low (tight stops), you can increase size.
+
+CRITICAL: ADAPTATION MEMORY & PATTERN RECOGNITION
+You will receive a "STRATEGY ADAPTATION MEMORY" block. It contains your historical win rates and specific PATTERN RECOGNITION directives (e.g., "AVOID BTC LONG", "AGGRESSIVE ON ETH SHORT").
+You MUST obey these directives. If a pattern is marked as a historical loser, you MUST require an exceptionally high confidence (>85) to propose it, or otherwise propose HOLD. If a pattern is a proven winner, you may propose it more aggressively.
 
 IMPORTANT: You are in a forward test / paper trading environment.
 It is BETTER to propose a trade and learn from it than to sit idle holding cash.
@@ -73,11 +77,11 @@ async def propose_trades(
     Calls the Quant Analyst to propose trades based solely on technicals, sentiment, and memory.
     No confidence filtering here — the engine handles the single confidence gate.
     """
-    if not ANTHROPIC_API_KEY:
-        logger.error("No ANTHROPIC_API_KEY found.")
+    if not GROQ_API_KEY:
+        logger.error("No GROQ_API_KEY found.")
         return []
 
-    client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = AsyncGroq(api_key=GROQ_API_KEY)
     
     # Construct the payload
     prompt_lines = []
@@ -98,14 +102,16 @@ async def propose_trades(
     user_prompt = "\n".join(prompt_lines)
 
     try:
-        response = await client.messages.create(
-            model=CLAUDE_MODEL,
+        response = await client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": QUANT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
             max_tokens=2000,
             temperature=0.3,
-            system=QUANT_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}]
         )
-        raw = response.content[0].text.strip()
+        raw = response.choices[0].message.content.strip()
         parsed = _extract_json_quant(raw)
         
         # Pass ALL proposals through — the engine handles the confidence gate

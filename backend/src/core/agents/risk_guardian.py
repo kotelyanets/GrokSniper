@@ -1,12 +1,12 @@
 import os
 import json
 import logging
-from anthropic import AsyncAnthropic
+from groq import AsyncGroq
 
 logger = logging.getLogger("groksniper.agents.risk")
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 RISK_SYSTEM_PROMPT = """You are the Chief Risk Officer (Risk Guardian) of a crypto hedge fund.
 The Quant Analyst has forwarded you several high-probability trade proposals.
@@ -66,10 +66,10 @@ async def evaluate_proposals(
     Submits the Quant's proposals to the Risk Guardian.
     btc_context: Data describing the current state of BTC if not in proposals.
     """
-    if not ANTHROPIC_API_KEY or not proposals:
+    if not GROQ_API_KEY or not proposals:
         return []
 
-    client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = AsyncGroq(api_key=GROQ_API_KEY)
     
     # Format the debate packet
     prompt_lines = []
@@ -99,14 +99,16 @@ async def evaluate_proposals(
     user_prompt = "\n".join(prompt_lines)
 
     try:
-        response = await client.messages.create(
-            model=CLAUDE_MODEL,
+        response = await client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": RISK_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
             max_tokens=1500,
             temperature=0.1,  # Lower temp for Risk Guardian
-            system=RISK_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}]
         )
-        raw = response.content[0].text.strip()
+        raw = response.choices[0].message.content.strip()
         parsed = _extract_json_risk(raw)
         
         # Merge risk verdicts back into proposals

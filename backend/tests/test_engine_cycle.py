@@ -12,7 +12,7 @@ from backend.src.core.engine import scan_all_tickers
 
 @pytest.fixture
 def mock_engine_dependencies():
-    with patch("backend.src.core.engine._get_btc_dump_mode", new_callable=AsyncMock) as mock_btc, \
+    with patch("backend.src.core.engine._exchange.is_btc_dumping", new_callable=AsyncMock) as mock_btc, \
          patch("backend.src.core.engine._fetch_mtf_condensed_ohlcv", new_callable=AsyncMock) as mock_ohlcv, \
          patch("backend.src.core.engine._groq_sentiment", new_callable=AsyncMock) as mock_sent, \
          patch("backend.src.core.engine.propose_trades", new_callable=AsyncMock) as mock_prop, \

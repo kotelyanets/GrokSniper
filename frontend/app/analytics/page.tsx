@@ -8,6 +8,11 @@ import {
 } from "recharts";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const usdFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+function formatUSD(value: number): string {
+    return usdFormatter.format(value);
+}
 
 interface EquityData {
     date: string;
@@ -22,6 +27,23 @@ interface AnalyticsData {
     total_pnl: number;
     equity_curve: EquityData[];
     error?: string;
+}
+
+interface FeatureImportance {
+    word: string;
+    importance: number;
+}
+
+interface MLData {
+    status: string;
+    message: string;
+    metrics?: {
+        accuracy_oob: number;
+        total_features: number;
+        has_micro_features: boolean;
+        top_features: FeatureImportance[];
+        last_trained_timestamp: number;
+    }
 }
 
 // ── Reusable metric card ───────────────────────────────────────────────────
@@ -57,7 +79,7 @@ const ChartTooltip = ({ active, payload, label }: any) => {
             fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--text-primary)"
         }}>
             <p style={{ color: "var(--text-muted)", marginBottom: "4px" }}>{new Date(label).toLocaleString()}</p>
-            <p style={{ color: "var(--cyan)" }}>PnL: <strong>${payload[0].value?.toFixed(2)}</strong></p>
+            <p style={{ color: "var(--cyan)" }}>PnL: <strong>{formatUSD(payload[0].value)}</strong></p>
         </div>
     );
 };
@@ -98,6 +120,7 @@ function EmptyState() {
 
 export default function AnalyticsPage() {
     const [data, setData] = useState<AnalyticsData | null>(null);
+    const [mlData, setMlData] = useState<MLData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -105,11 +128,26 @@ export default function AnalyticsPage() {
         setError(null);
         setLoading(true);
         try {
-            const res = await fetch(`${API}/api/analytics`);
+            const fetchOpts = {
+                cache: 'no-store' as const,
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            };
+            const res = await fetch(`${API}/api/analytics?t=${Date.now()}`, fetchOpts);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             setData(json);
+
+            // Fetch ML Data
+            const mlRes = await fetch(`${API}/api/ml/status?t=${Date.now()}`, fetchOpts);
+            if (mlRes.ok) {
+                const mlJson = await mlRes.json();
+                setMlData(mlJson);
+            }
         } catch (e: unknown) {
             // Show a friendly message — not a hard error block
             setError(e instanceof Error ? e.message : "Cannot reach backend");
@@ -197,7 +235,7 @@ export default function AnalyticsPage() {
                 <div className="page-enter page-enter-delay-1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
                     <MetricCard
                         label="Net PnL"
-                        value={`${data.total_pnl >= 0 ? "+" : ""}$${data.total_pnl.toFixed(2)}`}
+                        value={data.total_pnl >= 0 ? `+${formatUSD(data.total_pnl)}` : formatUSD(data.total_pnl)}
                         sub="Simulated paper returns"
                         color={pnlPositive ? "var(--green)" : "var(--red)"}
                     />
@@ -320,6 +358,60 @@ export default function AnalyticsPage() {
                                         </Bar>
                                     </BarChart>
                                 </ResponsiveContainer>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── ML Architecture Panel ── */}
+                    {mlData && mlData.status === "trained" && mlData.metrics && (
+                        <div style={{ gridColumn: "1 / -1", background: "var(--bg-card)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "12px", padding: "24px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+                                <div style={{ width: "36px", height: "36px", borderRadius: "8px", background: "rgba(139,92,246,0.15)", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(139,92,246,0.4)" }}>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" y1="22" x2="12" y2="12"/></svg>
+                                </div>
+                                <div>
+                                    <h3 style={{ fontFamily: "var(--font-syne)", fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Machine Learning Engine</h3>
+                                    <p style={{ fontFamily: "var(--font-jetbrains)", fontSize: "11px", color: "var(--violet)", margin: 0, marginTop: "2px" }}>RandomForestRegressor ∘ TF-IDF Vectors</p>
+                                </div>
+                            </div>
+                            
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "24px" }}>
+                                <div style={{ background: "rgba(0,0,0,0.2)", padding: "16px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                                    <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "var(--font-jetbrains)", textTransform: "uppercase", marginBottom: "4px" }}>Predictive Accuracy (OOB)</div>
+                                    <div style={{ fontSize: "24px", fontWeight: 700, color: "var(--violet)", fontFamily: "var(--font-jetbrains)" }}>{(mlData.metrics.accuracy_oob * 100).toFixed(1)}%</div>
+                                </div>
+                                <div style={{ background: "rgba(0,0,0,0.2)", padding: "16px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                                    <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "var(--font-jetbrains)", textTransform: "uppercase", marginBottom: "4px" }}>Total Features</div>
+                                    <div style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-primary)", fontFamily: "var(--font-jetbrains)" }}>{mlData.metrics.total_features}</div>
+                                </div>
+                                <div style={{ background: "rgba(0,0,0,0.2)", padding: "16px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
+                                    <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "var(--font-jetbrains)", textTransform: "uppercase", marginBottom: "4px" }}>Micro-Markets</div>
+                                    <div style={{ fontSize: "24px", fontWeight: 700, color: mlData.metrics.has_micro_features ? "var(--green)" : "var(--text-muted)", fontFamily: "var(--font-jetbrains)" }}>{mlData.metrics.has_micro_features ? "ACTIVE" : "OFF"}</div>
+                                </div>
+                            </div>
+
+                            <p style={{ fontFamily: "var(--font-syne)", fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "16px" }}>
+                                Top Influential News Tokens (Feature Importance)
+                            </p>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                                {mlData.metrics.top_features.map((feat, idx) => {
+                                    // Calculate relative opacity based on rank
+                                    const opacity = Math.max(0.15, 1 - (idx * 0.05));
+                                    return (
+                                        <div key={idx} style={{
+                                            background: `rgba(139,92,246,${opacity})`,
+                                            border: `1px solid rgba(139,92,246,${opacity + 0.2})`,
+                                            padding: "6px 12px",
+                                            borderRadius: "100px",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px"
+                                        }}>
+                                            <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "12px", color: "#fff", fontWeight: 500 }}>{feat.word}</span>
+                                            <span style={{ fontFamily: "var(--font-jetbrains)", fontSize: "10px", color: "rgba(255,255,255,0.6)" }}>{(feat.importance * 100).toFixed(2)}%</span>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     )}

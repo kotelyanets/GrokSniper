@@ -23,10 +23,10 @@ from backend.src.core.agents.quant_analyst import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_anthropic_response(content: str):
-    """Build a fake Anthropic messages.create() response."""
+def _make_groq_response(content: str):
+    """Build a fake Groq chat completions response."""
     msg = MagicMock()
-    msg.content = [MagicMock(text=content)]
+    msg.choices = [MagicMock(message=MagicMock(content=content))]
     return msg
 
 
@@ -111,7 +111,7 @@ class TestProposeTrades:
     async def test_no_api_key_returns_empty(self, monkeypatch):
         """Without an API key, returns empty list immediately."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "")
         result = await propose_trades([_ticker_data()], {})
         assert result == []
 
@@ -119,7 +119,7 @@ class TestProposeTrades:
     async def test_long_above_threshold_returned(self, monkeypatch):
         """Proposal with LONG and confidence ≥ threshold → included."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
         monkeypatch.setattr(mod, "CONFIDENCE_THRESHOLD", 60)
 
         proposals = [{"ticker": "BTC", "proposed_action": "LONG",
@@ -127,11 +127,11 @@ class TestProposeTrades:
                       "suggested_tp": 56000.0, "position_size_pct": 10,
                       "quant_reasoning": "Strong breakout."}]
 
-        fake_response = _make_anthropic_response(json.dumps(proposals))
+        fake_response = _make_groq_response(json.dumps(proposals))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_response)
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             result = await propose_trades([_ticker_data("BTC")],
                                           {"BTC": (70, "Neutral outlook")})
@@ -143,17 +143,17 @@ class TestProposeTrades:
     async def test_hold_action_filtered_out(self, monkeypatch):
         """HOLD proposals are never returned."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         proposals = [{"ticker": "ETH", "proposed_action": "HOLD", "confidence": 90,
                       "suggested_sl": 0.0, "suggested_tp": 0.0,
                       "position_size_pct": 5, "quant_reasoning": "Choppy market."}]
 
-        fake_response = _make_anthropic_response(json.dumps(proposals))
+        fake_response = _make_groq_response(json.dumps(proposals))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_response)
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             result = await propose_trades([_ticker_data("ETH")], {})
 
@@ -163,17 +163,17 @@ class TestProposeTrades:
     async def test_low_confidence_passed_through(self, monkeypatch):
         """Low-confidence proposals are now passed through (engine handles filtering)."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         proposals = [{"ticker": "SOL", "proposed_action": "LONG", "confidence": 50,
                       "suggested_sl": 90.0, "suggested_tp": 130.0,
                       "position_size_pct": 5, "quant_reasoning": "Weak setup."}]
 
-        fake_response = _make_anthropic_response(json.dumps(proposals))
+        fake_response = _make_groq_response(json.dumps(proposals))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_response)
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             result = await propose_trades([_ticker_data("SOL")], {})
 
@@ -185,12 +185,12 @@ class TestProposeTrades:
     async def test_api_exception_returns_empty(self, monkeypatch):
         """API crash → returns [] without raising."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
+        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("API down"))
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             result = await propose_trades([_ticker_data()], {})
 
@@ -200,36 +200,36 @@ class TestProposeTrades:
     async def test_memory_injected_into_prompt(self, monkeypatch):
         """recent_memory string appears in the call to the API."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         proposals = [{"ticker": "BTC", "proposed_action": "LONG", "confidence": 80,
                       "suggested_sl": 48000.0, "suggested_tp": 56000.0,
                       "position_size_pct": 10, "quant_reasoning": "Strong"}]
 
-        fake_response = _make_anthropic_response(json.dumps(proposals))
+        fake_response = _make_groq_response(json.dumps(proposals))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_response)
 
         memory = "--- RECENT PERFORMANCE MEMORY --- WIN +5.2%"
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             await propose_trades([_ticker_data()], {}, recent_memory=memory)
 
-        call_kwargs = mock_client.messages.create.call_args
-        prompt_text = call_kwargs[1]["messages"][0]["content"]
+        call_kwargs = mock_client.chat.completions.create.call_args
+        prompt_text = call_kwargs[1]["messages"][1]["content"]
         assert "RECENT PERFORMANCE MEMORY" in prompt_text
 
     @pytest.mark.asyncio
     async def test_empty_ticker_list_returns_empty(self, monkeypatch):
         """No ticker data provided → API not called, returns []."""
         import backend.src.core.agents.quant_analyst as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=_make_anthropic_response("[]"))
+        mock_client.chat.completions.create = AsyncMock(return_value=_make_groq_response("[]"))
 
-        with patch("backend.src.core.agents.quant_analyst.AsyncAnthropic",
+        with patch("backend.src.core.agents.quant_analyst.AsyncGroq",
                    return_value=mock_client):
             result = await propose_trades([], {})
 

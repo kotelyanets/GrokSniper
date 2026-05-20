@@ -8,11 +8,13 @@ Sets DRY_RUN=True and dummy env vars so tests never touch real APIs or DB.
 
 import os
 import pytest
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── Set all env vars BEFORE any backend module is imported ──────────────────
 os.environ.setdefault("DRY_RUN",             "True")
 os.environ.setdefault("PAPER_TRADE",         "True")
-os.environ.setdefault("DATABASE_URL",        "postgresql+asyncpg://test:test@localhost:5432/testdb")
+os.environ.setdefault("DATABASE_URL",        os.getenv("DATABASE_URL", "postgresql+asyncpg://groksniper_user:change_me_strong_password@localhost:5432/groksniper"))
 os.environ.setdefault("ANTHROPIC_API_KEY",   "test-key")
 os.environ.setdefault("GROQ_API_KEY",        "test-key")
 os.environ.setdefault("BINANCE_API_KEY",     "test-key")

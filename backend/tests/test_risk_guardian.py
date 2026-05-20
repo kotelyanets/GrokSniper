@@ -22,9 +22,9 @@ from backend.src.core.agents.risk_guardian import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_anthropic_response(content: str):
+def _make_groq_response(content: str):
     msg = MagicMock()
-    msg.content = [MagicMock(text=content)]
+    msg.choices = [MagicMock(message=MagicMock(content=content))]
     return msg
 
 
@@ -101,28 +101,28 @@ class TestEvaluateProposals:
     @pytest.mark.asyncio
     async def test_no_api_key_returns_empty(self, monkeypatch):
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "")
         result = await evaluate_proposals([_proposal()], "BTC: Healthy", [])
         assert result == []
 
     @pytest.mark.asyncio
     async def test_empty_proposals_returns_empty(self, monkeypatch):
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
         result = await evaluate_proposals([], "BTC: Healthy", [])
         assert result == []
 
     @pytest.mark.asyncio
     async def test_approved_verdict_propagated(self, monkeypatch):
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         verdict = [_guardian_verdict("BTC", "APPROVED", 10, "All clear.")]
-        fake_resp = _make_anthropic_response(json.dumps(verdict))
+        fake_resp = _make_groq_response(json.dumps(verdict))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(
                 [_proposal("BTC")], "BTC: healthy uptrend",
@@ -134,14 +134,14 @@ class TestEvaluateProposals:
     @pytest.mark.asyncio
     async def test_rejected_verdict_propagated(self, monkeypatch):
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         verdict = [_guardian_verdict("ETH", "REJECTED", 10, "BTC is distribution.")]
-        fake_resp = _make_anthropic_response(json.dumps(verdict))
+        fake_resp = _make_groq_response(json.dumps(verdict))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(
                 [_proposal("ETH")], "BTC: distribution",
@@ -155,17 +155,17 @@ class TestEvaluateProposals:
     async def test_guardian_reduces_position_size(self, monkeypatch):
         """Guardian can lower the Quant's proposed size."""
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         # Quant proposed 50%, guardian says only 10%
         verdict = [_guardian_verdict("BTC", "APPROVED", size_pct=10, reason="Reduced risk.")]
-        fake_resp = _make_anthropic_response(json.dumps(verdict))
+        fake_resp = _make_groq_response(json.dumps(verdict))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
 
         proposal = _proposal("BTC", size_pct=50)
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(
                 [proposal], "BTC: rallying",
@@ -179,15 +179,15 @@ class TestEvaluateProposals:
     async def test_no_matching_ticker_defaults_to_rejected(self, monkeypatch):
         """Guardian returns verdicts for a different ticker → proposal defaults to REJECTED."""
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         # Guardian returns verdict for ETH but proposal is for BTC
         verdict = [_guardian_verdict("ETH", "APPROVED", 10, "ETH looks fine.")]
-        fake_resp = _make_anthropic_response(json.dumps(verdict))
+        fake_resp = _make_groq_response(json.dumps(verdict))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(
                 [_proposal("BTC")], "BTC: context",
@@ -200,14 +200,14 @@ class TestEvaluateProposals:
     async def test_api_exception_approves_all_fail_open(self, monkeypatch):
         """If the API crashes, all proposals are APPROVED (fail-open mode)."""
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(side_effect=RuntimeError("Guardian offline"))
+        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("Guardian offline"))
 
         proposals = [_proposal("BTC"), _proposal("ETH")]
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(proposals, "BTC: ctx", [])
 
@@ -218,21 +218,21 @@ class TestEvaluateProposals:
     async def test_multiple_proposals_all_evaluated(self, monkeypatch):
         """Multiple proposals → all get a verdict."""
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         verdicts = [
             _guardian_verdict("BTC", "APPROVED", 10, "Strong."),
             _guardian_verdict("ETH", "REJECTED", 5, "Risky."),
             _guardian_verdict("SOL", "APPROVED", 8, "Good setup."),
         ]
-        fake_resp = _make_anthropic_response(json.dumps(verdicts))
+        fake_resp = _make_groq_response(json.dumps(verdicts))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
 
         proposals = [_proposal("BTC"), _proposal("ETH"), _proposal("SOL")]
         ticker_data = [{"ticker": t, "condensed": f"{t} data"} for t in ["BTC", "ETH", "SOL"]]
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             result = await evaluate_proposals(proposals, "BTC context", ticker_data)
 
@@ -241,15 +241,15 @@ class TestEvaluateProposals:
     @pytest.mark.asyncio
     async def test_memory_injected_when_provided(self, monkeypatch):
         import backend.src.core.agents.risk_guardian as mod
-        monkeypatch.setattr(mod, "ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(mod, "GROQ_API_KEY", "test-key")
 
         verdict = [_guardian_verdict("BTC", "APPROVED")]
-        fake_resp = _make_anthropic_response(json.dumps(verdict))
+        fake_resp = _make_groq_response(json.dumps(verdict))
         mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=fake_resp)
+        mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
         memory = "--- RECENT PERFORMANCE MEMORY --- LOSS -3.2%"
 
-        with patch("backend.src.core.agents.risk_guardian.AsyncAnthropic",
+        with patch("backend.src.core.agents.risk_guardian.AsyncGroq",
                    return_value=mock_client):
             await evaluate_proposals(
                 [_proposal("BTC")], "BTC ctx",
@@ -257,6 +257,6 @@ class TestEvaluateProposals:
                 recent_memory=memory
             )
 
-        call_kwargs = mock_client.messages.create.call_args
-        prompt_text = call_kwargs[1]["messages"][0]["content"]
+        call_kwargs = mock_client.chat.completions.create.call_args
+        prompt_text = call_kwargs[1]["messages"][1]["content"]
         assert "RECENT PERFORMANCE MEMORY" in prompt_text

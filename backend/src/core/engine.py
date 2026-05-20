@@ -34,6 +34,8 @@ from backend.src.db.database import get_session
 from backend.src.db.models import NewsLog, Trade
 from backend.src.services.exchange import CryptoExchange
 from backend.src.services.telegram_bot import send_telegram_message
+from backend.src.services.risk_manager import get_dynamic_position_size
+from backend.src.services.capital_manager import global_capital_manager
 
 from backend.src.core.agents.quant_analyst import propose_trades
 from backend.src.core.agents.risk_guardian import evaluate_proposals
@@ -65,31 +67,7 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 0 — BTC Gravity Filter (Safety Net — NOT a trading signal)
 # ═══════════════════════════════════════════════════════════════════════════════
-async def _get_btc_dump_mode() -> bool:
-    """Fetch BTC/USDT 1h candle. If dropped >1.5% in the last hour, return True."""
-    exchange = ccxt.binance({"enableRateLimit": True})
-    testnet = os.getenv("BINANCE_TESTNET", "").lower() in ("true", "1", "yes")
-    if testnet:
-        exchange.set_sandbox_mode(True)
-    try:
-        ohlcv = await exchange.fetch_ohlcv("BTC/USDT", "1h", limit=2)
-        if not ohlcv or len(ohlcv) < 2:
-            return False
-
-        last_candle = ohlcv[-1]
-        c_open, c_high, c_close = last_candle[1], last_candle[2], last_candle[4]
-        drop_pct_open = ((c_open - c_close) / c_open) * 100
-        drop_pct_high = ((c_high - c_close) / c_high) * 100
-
-        if drop_pct_open > 1.5 or drop_pct_high > 1.5:
-            logger.warning(f"🚨 BTC DUMP MODE ACTIVATED! (Drop: {max(drop_pct_open, drop_pct_high):.2f}%)")
-            return True
-        return False
-    except Exception as e:
-        logger.error(f"Error checking BTC dump mode: {e}")
-        return False
-    finally:
-        await exchange.close()
+# [REMOVED] _get_btc_dump_mode merged into CryptoExchange.is_btc_dumping()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -97,100 +75,29 @@ async def _get_btc_dump_mode() -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 async def _fetch_mtf_condensed_ohlcv(ticker: str) -> tuple[str, dict, object]:
     """
-    Fetch last 5 candles (4H) and 15 candles (15m).
-    Compute key indicators locally on 15m.
-    Returns (condensed_text, indicators_dict, df_15m).
+    Fetch MTF data using the centralized Exchange oracle.
     """
-    symbol = f"{ticker}/USDT" if "/" not in ticker else ticker
-
-    exchange = ccxt.binance({"enableRateLimit": True})
-    testnet = os.getenv("BINANCE_TESTNET", "").lower() in ("true", "1", "yes")
-    if testnet:
-        exchange.set_sandbox_mode(True)
-
     try:
-        ohlcv_1d = await exchange.fetch_ohlcv(symbol, "1d", limit=3)
-        ohlcv_4h = await exchange.fetch_ohlcv(symbol, "4h", limit=10)
-        ohlcv_15m = await exchange.fetch_ohlcv(symbol, "15m", limit=35)
+        # Use our centralized indicators service
+        indicators = await _exchange.get_technical_indicators(ticker, timeframe='15m')
+        
+        # Build condensed text for Claude from indicators
+        condensed = (
+            f"TICKER: {ticker}\n"
+            f"15m INDICATORS: RSI={indicators['rsi']:.1f} EMA20={indicators['ema_20']:.1f} "
+            f"PRICE: {indicators['close']:.2f} ATR={indicators['atr']:.2f}\n"
+            f"MACD={indicators['macd_line']:.2f} SIG={indicators['macd_signal']:.2f}"
+        )
+        
+        # Create a df that's compatible with the chart generator
+        # We need more than 1 row for a chart, so let's fetch raw OHLCV for visuals
+        # actually for now we'll return the indicators and a minimal df to keep it light
+        df_15m = pd.DataFrame([indicators])
+        
+        return condensed, indicators, df_15m
     except Exception as e:
-        logger.error("OHLCV fetch failed for %s: %s", ticker, e)
+        logger.error(f"Failed to fetch MTF for {ticker}: {e}")
         return "", {}, None
-
-    obi_pct = 0.0
-    try:
-        ob = await exchange.fetch_order_book(symbol, limit=5)
-        bid_vol = sum(b[1] for b in ob["bids"])
-        ask_vol = sum(a[1] for a in ob["asks"])
-        total = bid_vol + ask_vol
-        obi_pct = round(((bid_vol - ask_vol) / total) * 100, 1) if total > 0 else 0.0
-    except Exception as e:
-        logger.warning("OBI fetch failed for %s: %s", ticker, e)
-    finally:
-        await exchange.close()
-
-    if not ohlcv_1d or not ohlcv_4h or len(ohlcv_4h) < 5 or not ohlcv_15m or len(ohlcv_15m) < 15:
-        return "", {}, None
-
-    df_15m = pd.DataFrame(ohlcv_15m, columns=["ts", "O", "H", "L", "C", "V"])
-    df_15m["rsi"] = ta.rsi(df_15m["C"], length=14)
-    df_15m["ema9"] = ta.ema(df_15m["C"], length=9)
-    df_15m["ema20"] = ta.ema(df_15m["C"], length=20)
-    macd_df = ta.macd(df_15m["C"], fast=12, slow=26, signal=9)
-    if macd_df is not None and not macd_df.empty:
-        df_15m["macd"] = macd_df.iloc[:, 0]
-        df_15m["sig"] = macd_df.iloc[:, 2]
-    else:
-        df_15m["macd"] = 0.0
-        df_15m["sig"] = 0.0
-    df_15m["atr"] = ta.atr(df_15m["H"], df_15m["L"], df_15m["C"], length=14)
-
-    bb_df = ta.bbands(df_15m["C"], length=20, std=2)
-    if bb_df is not None and not bb_df.empty:
-        df_15m["bbl"] = bb_df.iloc[:, 0]
-        df_15m["bbu"] = bb_df.iloc[:, 2]
-    else:
-        df_15m["bbl"] = 0.0
-        df_15m["bbu"] = 0.0
-
-    df_15m_text = df_15m.tail(15).reset_index(drop=True)
-
-    df_4h = pd.DataFrame(ohlcv_4h, columns=["ts", "O", "H", "L", "C", "V"])
-    df_4h = df_4h.tail(5).reset_index(drop=True)
-
-    df_1d = pd.DataFrame(ohlcv_1d, columns=["ts", "O", "H", "L", "C", "V"])
-
-    lines_1d = [f"1D_C{i+1}:  O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_1d.iterrows()]
-    lines_4h = [f"4H_C{i+1}:  O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_4h.iterrows()]
-    lines_15m = [f"15m_C{i+1}: O:{r['O']:.1f} H:{r['H']:.1f} L:{r['L']:.1f} C:{r['C']:.1f} V:{int(r['V'])}" for i, r in df_15m_text.iterrows()]
-    candle_block = "=== DAILY ===\n" + "\n".join(lines_1d) + "\n=== 4H ===\n" + "\n".join(lines_4h) + "\n=== 15m ===\n" + "\n".join(lines_15m)
-
-    latest = df_15m.iloc[-1]
-    rsi = float(latest["rsi"]) if pd.notna(latest["rsi"]) else 50.0
-    ema9 = float(latest["ema9"]) if pd.notna(latest["ema9"]) else 0.0
-    ema20 = float(latest["ema20"]) if pd.notna(latest["ema20"]) else 0.0
-    macd_val = float(latest["macd"]) if pd.notna(latest["macd"]) else 0.0
-    sig_val = float(latest["sig"]) if pd.notna(latest["sig"]) else 0.0
-    atr_val = float(latest["atr"]) if pd.notna(latest["atr"]) else 0.0
-    bbu = float(latest["bbu"]) if "bbu" in latest and pd.notna(latest["bbu"]) else 0.0
-    bbl = float(latest["bbl"]) if "bbl" in latest and pd.notna(latest["bbl"]) else 0.0
-    close = float(latest["C"])
-
-    condensed = (
-        f"TICKER: {ticker}\n"
-        f"TF: 1D, 4H & 15m\n"
-        f"{candle_block}\n"
-        f"15m INDICATORS: RSI={rsi:.1f} EMA9={ema9:.1f} EMA20={ema20:.1f} "
-        f"MACD={macd_val:.2f} SIG={sig_val:.2f}\n"
-        f"VOLATILITY: ATR={atr_val:.2f} BBU={bbu:.2f} BBL={bbl:.2f}\n"
-        f"OBI: {obi_pct:+.1f}% | PRICE: {close:.2f}"
-    )
-
-    indicators = {
-        "rsi": rsi, "ema9": ema9, "ema20": ema20,
-        "macd": macd_val, "signal": sig_val, "atr": atr_val,
-        "close": close, "obi": obi_pct,
-    }
-    return condensed, indicators, df_15m
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -455,18 +362,51 @@ async def _execute_decision(
     if price <= 0:
         return {"ticker": ticker, "action": "SKIP", "reason": "Invalid price"}
 
-    # Position sizing (Claude-driven %)
+    trade_action = "BUY" if action == "LONG" else "SELL"
+
+    # Position sizing (AI suggestion vs Kelly Criterion)
     initial_equity = float(os.getenv("INITIAL_EQUITY", "10000.0"))
     balance_data = await _exchange.get_balance()
     equity = balance_data.get("total_usdt", initial_equity)
+    
+    is_paper = os.getenv("DRY_RUN", "False").lower() == "true" or not _exchange._has_keys
 
-    trade_usdt = equity * (pos_pct / 100.0)
+    # Get Kelly Criterion baseline maximum size for this balance
+    async with get_session() as session:
+        kelly_max_usdt, kelly_desc = await get_dynamic_position_size(
+            db_session=session, 
+            current_balance=equity, 
+            paper_trade=is_paper
+        )
+
+    # Combine AI confidence explicitly to scale the Kelly max
+    # AI pos_pct is usually 1-25% (often 5% default). 
+    # Let's say AI suggests 10% allocating size, but Kelly says at most $200.
+    # We take the MINIMUM to stay safe.
+    ai_usdt = equity * (pos_pct / 100.0)
+    trade_usdt = min(ai_usdt, kelly_max_usdt)
+
+    # ── CAPITAL MANAGER EXPOSURE GUARD ─────────────────────────────────────────
+    async with get_session() as session:
+        is_approved, allowed_usdt, capital_msg = await global_capital_manager.evaluate_trade(
+            db_session=session,
+            ticker=ticker,
+            proposed_action=trade_action,
+            proposed_usdt=trade_usdt,
+            total_balance=equity,
+            is_paper=is_paper
+        )
+
+    if not is_approved:
+        logger.warning("Capital Manager BLOCKED %s %s: %s", trade_action, ticker, capital_msg)
+        return {"ticker": ticker, "action": "SKIP", "reason": f"Capital Manager: {capital_msg}"}
+
+    trade_usdt = allowed_usdt
     amount = trade_usdt / price
 
-    trade_action = "BUY" if action == "LONG" else "SELL"
     logger.info(
-        "EXECUTING %s %s | size=$%.2f (%.6f @ $%.2f) | confidence=%d | regime=%s",
-        trade_action, ticker, trade_usdt, amount, price, confidence, regime,
+        "FINAL EXECUTION %s %s | Confirmed Size=$%.2f (%.6f @ $%.2f) | conf=%d | %s",
+        trade_action, ticker, trade_usdt, amount, price, confidence, capital_msg
     )
 
     order = await _exchange.execute_trade(
@@ -477,32 +417,54 @@ async def _execute_decision(
 
     # Persist trade
     async with get_session() as session:
-        trade = Trade(
+        new_trade = Trade(
             ticker=ticker,
             action=trade_action,
             amount=Decimal(str(order.get("amount", amount))),
             price=Decimal(str(order.get("price", price))) if order.get("price", 0) > 0 else Decimal(str(price)),
             status="success",
-            reason=f"[AI Phase8] {regime} | {reasoning[:400]}",
+            side=action,  # "LONG" or "SHORT"
+            stop_loss_price=float(suggested_sl) if suggested_sl > 0 else None,
+            position_size_usdt=float(trade_usdt),
+            reason=f"[AI Phase11] {regime} | {reasoning[:400]}",
         )
-        session.add(trade)
+        session.add(new_trade)
+        
+        # Compile a detailed analysis report for transparency
+        detailed_report = (
+            f"=== QUANT ANALYST ===\n{quant_reason}\n\n"
+            f"=== RISK GUARDIAN ===\n{risk_reason}\n\n"
+            f"=== POSITION SIZING & CAPITAL MANAGEMENT ===\n"
+            f"AI Suggested: {pos_pct}% (${ai_usdt:.2f})\n"
+            f"Kelly Criterion Limit: ${kelly_max_usdt:.2f}\n"
+            f"Capital Manager: {capital_msg}\n"
+            f"Final Decision: {kelly_desc} → Size: ${trade_usdt:.2f}\n"
+        )
+        
+        # BRIDGE: Record for analytics if in paper mode
+        if is_paper:
+            from backend.src.db.models import PaperTrade
+            session.add(PaperTrade(
+                ticker=ticker,
+                action="LONG" if action == "LONG" else "SHORT",
+                entry_price=float(new_trade.price),
+                size_usdt=float(trade_usdt),
+                stop_loss=float(suggested_sl),
+                take_profit=float(suggested_tp),
+                status="OPEN",
+                ai_reasoning=reasoning[:400],
+                analysis_report=detailed_report
+            ))
         await session.flush()
-        trade_id = trade.id
+        trade_id = new_trade.id
 
     # Telegram notification with chart
-    side_emoji = "🟢" if action == "LONG" else "🔴"
-    tg_caption = (
-        f"{side_emoji} *{action} SIGNAL EXECUTED*\n\n"
-        f"*Ticker:* {ticker}\n"
-        f"*Regime:* {regime}\n"
-        f"*Price:* ${price:,.4f}\n"
-        f"*Stop-Loss:* ${suggested_sl:,.4f} (_AI Calculated_)\n"
-        f"*Take-Profit:* ${suggested_tp:,.4f} (_AI Calculated_)\n"
-        f"*Size:* ${trade_usdt:,.2f} ({pos_pct}% of capital)\n"
-        f"*Confidence:* {confidence}%\n"
-        f"*Quant Rationale:* {quant_reason}\n"
-        f"*Risk Guardian:* {risk_reason}\n\n"
-        f"_Phase 9: Multi-Agent Board of Directors_"
+    from backend.src.services.telegram_listener import format_trade_open_alert
+    tg_caption_html = format_trade_open_alert(
+        ticker=ticker, action=action, price=price, size_usdt=trade_usdt,
+        confidence=confidence, regime=regime,
+        reasoning=f"Quant: {quant_reason} | Risk: {risk_reason}",
+        sl=suggested_sl, tp=suggested_tp,
     )
 
     try:
@@ -512,13 +474,13 @@ async def _execute_decision(
         chart_path = generate_trade_chart(ticker, df_15m, action, price, suggested_sl)
 
         if chart_path and os.path.exists(chart_path):
-            await send_photo_alert(chart_path, tg_caption, parse_mode="Markdown")
+            await send_photo_alert(chart_path, tg_caption_html, parse_mode="HTML")
             os.remove(chart_path)
         else:
-            await send_telegram_message(tg_caption, parse_mode="Markdown")
+            await send_telegram_message(tg_caption_html, parse_mode="HTML")
     except Exception as e:
         logger.error("Failed to generate/send Telegram chart: %s", e)
-        await send_telegram_message(tg_caption, parse_mode="Markdown")
+        await send_telegram_message(tg_caption_html, parse_mode="HTML")
 
     return {
         "ticker": ticker,
@@ -558,7 +520,7 @@ async def scan_all_tickers(latest_news: str = "") -> list[dict]:
         logger.info("Testnet mode — skipping BTC dump check (testnet data is unreliable).")
         btc_dump = False
     else:
-        btc_dump = await _get_btc_dump_mode()
+        btc_dump = await _exchange.is_btc_dumping()
     if btc_dump:
         logger.warning("BTC DUMP MODE — skipping all LONG analysis this cycle.")
         return [{"ticker": t, "action": "SKIP", "reason": "BTC dump mode active", "trade_placed": False}

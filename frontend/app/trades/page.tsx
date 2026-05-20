@@ -37,9 +37,15 @@ interface Reasoning {
     is_approved?: boolean;
 }
 
+const usdFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+function formatUSD(value: number): string {
+    return usdFormatter.format(value);
+}
+
 function formatPrice(price: number) {
     return price >= 1
-        ? `$${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ? formatUSD(price)
         : `$${price.toFixed(6)}`;
 }
 
@@ -59,7 +65,14 @@ function ReasoningPanel({ tradeId }: { tradeId: string }) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch(`${API}/api/trades/${tradeId}/reasoning`)
+        fetch(`${API}/api/trades/${tradeId}/reasoning?t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+        })
             .then((r) => r.json())
             .then(setData)
             .catch(() => setData({ reasoning: "Failed to load reasoning.", regime: null, confidence: null }))
@@ -121,7 +134,14 @@ export default function TradesPage() {
     const fetchTrades = useCallback(async () => {
         setError(null);
         try {
-            const res = await fetch(`${API}/api/trades`);
+            const res = await fetch(`${API}/api/trades?t=${Date.now()}`, {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+            });
             if (!res.ok) throw new Error("API error");
             setTrades(await res.json());
         } catch {

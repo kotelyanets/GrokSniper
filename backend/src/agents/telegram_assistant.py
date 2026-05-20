@@ -16,8 +16,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
-from groq import Groq
-from anthropic import AsyncAnthropic
+from groq import Groq, AsyncGroq
 
 from crewai import LLM
 from dotenv import load_dotenv
@@ -48,12 +47,15 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Claude model env deleted since we transitioned to free Groq.
+
 # ---------------------------------------------------------------------------
-# Groq client for Whisper (audio) + LLM (chat)
+# Groq client for Whisper transcription and LLM (chat)
 # ---------------------------------------------------------------------------
-_anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-if not _anthropic_api_key:
-    logger.warning("ANTHROPIC_API_KEY not set — AI assistant will use fallback/fail.")
+_groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
+groq_client = Groq(api_key=_groq_api_key) if _groq_api_key else None
+if not _groq_api_key:
+    logger.warning("GROQ_API_KEY not set — AI assistant will use fallback/fail.")
 
 # ---------------------------------------------------------------------------
 # Chat memory — simple per-user message history (kept in RAM)
@@ -182,26 +184,23 @@ def _execute_tools(response_text: str) -> str | None:
     # GET_ACCOUNT
     if "[GET_ACCOUNT]" in response_text:
         logger.info("Tool call: GET_ACCOUNT")
-        async def _run_get_account():
-            return await get_account_summary()
-        result = asyncio.run(_run_get_account())
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(get_account_summary()) if not loop.is_running() else "⚠️ Cannot run nested async. Use /status instead."
         tool_outputs.append(f"💰 Account Summary:\n{result}")
 
     # ANALYZE: TICKER
     for match in re.finditer(r"\[ANALYZE:\s*(\w+?)\]", response_text):
         ticker = match.group(1).strip().upper()
         logger.info(f"Tool call: ANALYZE({ticker})")
-        async def _run_analyze():
-            return await request_on_demand_analysis(ticker)
-        result = asyncio.run(_run_analyze())
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(request_on_demand_analysis(ticker)) if not loop.is_running() else "⚠️ Cannot run nested async. Use /board instead."
         tool_outputs.append(f"🏛️ Analysis for {ticker}:\n{result}")
 
     # PANIC
     if "[PANIC]" in response_text:
         logger.info("Tool call: PANIC")
-        async def _run_panic():
-            return await close_all_positions()
-        result = asyncio.run(_run_panic())
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(close_all_positions()) if not loop.is_running() else "⚠️ Cannot run nested async. Use /panic instead."
         tool_outputs.append(f"🚨 Panic Result:\n{result}")
 
     return "\n\n".join(tool_outputs) if tool_outputs else None
@@ -212,32 +211,28 @@ def _execute_tools(response_text: str) -> str | None:
 # ---------------------------------------------------------------------------
 async def chat(user_id: int, user_message: str) -> str:
     """
-    Process a user message through the AI assistant (Claude 3.5 Sonnet).
+    Process a user message through the AI assistant (Groq llama-3.3-70b-versatile).
     """
-    if not _anthropic_api_key:
-        return "❌ Anthropic API key not configured. Cannot process messages."
+    if not _groq_api_key:
+        return "❌ Groq API key not configured. Cannot process messages."
 
     history = _get_history(user_id)
     history.append({"role": "user", "content": user_message})
     _trim_history(user_id)
 
-    client = AsyncAnthropic(api_key=_anthropic_api_key)
-    
-    # Build messages
-    messages = history
+    client = AsyncGroq(api_key=_groq_api_key)
 
     try:
         # First LLM call — may contain tool invocations
-        response = await client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + history,
             max_tokens=2048,
             temperature=0,
-            system=SYSTEM_PROMPT,
-            messages=messages,
         )
 
-        assistant_text = response.content[0].text
-        logger.info(f"Claude response (first pass): {assistant_text[:200]}...")
+        assistant_text = response.choices[0].message.content
+        logger.info(f"Groq response (first pass): {assistant_text[:200]}...")
 
         # Check for tools
         tool_output = _execute_tools(assistant_text)
@@ -251,14 +246,13 @@ async def chat(user_id: int, user_message: str) -> str:
             })
             _trim_history(user_id)
             
-            final_res = await client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+            final_res = await client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + history,
                 max_tokens=2048,
                 temperature=0,
-                system=SYSTEM_PROMPT,
-                messages=history,
             )
-            final_text = final_res.content[0].text
+            final_text = final_res.choices[0].message.content
             history.append({"role": "assistant", "content": final_text})
             return final_text
         else:

@@ -45,24 +45,24 @@ load_dotenv(_BACKEND_DIR  / ".env")            # backend/.env fallback
 load_dotenv()                                  # cwd fallback
 
 # Ensure the key is visible to all downstream libraries
-os.environ.setdefault("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY", ""))
+os.environ.setdefault("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Strict API key guard — fail fast with a clear message
 # ---------------------------------------------------------------------------
-_ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
-if not _ANTHROPIC_KEY:
-    logger.warning("ANTHROPIC_API_KEY not set — Board of Directors disabled.")
-    claude_llm = None
+_GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
+if not _GROQ_KEY:
+    logger.warning("GROQ_API_KEY not set — Board of Directors disabled.")
+    groq_llm = None
 else:
     # ---------------------------------------------------------------------------
-    # LLM — CrewAI native wrapper → Anthropic / Claude
+    # LLM — CrewAI native wrapper → Groq / Llama
     # ---------------------------------------------------------------------------
-    claude_llm = LLM(
-        model="anthropic/claude-3-5-sonnet-latest", 
-        api_key=_ANTHROPIC_KEY,
+    groq_llm = LLM(
+        model="groq/llama-3.3-70b-versatile",
+        api_key=_GROQ_KEY,
         temperature=0.1 # Low temperature for strict, mathematical logic
     )
 
@@ -79,7 +79,7 @@ quant_analyst = Agent(
         "before recommending any trade direction."
     ),
     tools=[read_shadow_csv],
-    llm=claude_llm,
+    llm=groq_llm,
     verbose=True,
     allow_delegation=False,
 )
@@ -95,7 +95,7 @@ risk_guardian = Agent(
         "You veto trades that show a bad risk-reward ratio, extreme funding, "
         "or a choppy/unconfirmed regime. When in doubt, HOLD."
     ),
-    llm=claude_llm,
+    llm=groq_llm,
     verbose=True,
     allow_delegation=False,
 )
@@ -154,8 +154,8 @@ async def get_board_decision() -> str:
     Executes the board crew kickoff in a separate thread to avoid blocking the event loop.
     Returns the final board decision string.
     """
-    if not claude_llm:
-        return "🚨 Board error: ANTHROPIC_API_KEY missing. Board of Directors is disabled."
+    if not groq_llm:
+        return "🚨 Board error: GROQ_API_KEY missing. Board of Directors is disabled."
     try:
         result = await asyncio.to_thread(board_crew.kickoff)
         return str(result)

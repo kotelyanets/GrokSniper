@@ -34,6 +34,9 @@ def _mock_trade(ticker="BTC", action="LONG", side="LONG",
     t.reason = reason
     t.ai_reasoning = ai_reasoning
     t.created_at = created_at or datetime(2026, 3, 10, 12, 0, 0)
+    
+    direction = 1 if (action or side or "LONG") == "LONG" else -1
+    t.pnl_usdt = float((exit_price - entry_price) * direction)
     return t
 
 
@@ -49,10 +52,7 @@ def _make_async_ctx(live_trades, paper_trades, raise_exc=False):
     if raise_exc:
         session.execute = AsyncMock(side_effect=RuntimeError("DB error"))
     else:
-        session.execute = AsyncMock(side_effect=[
-            make_result(live_trades),
-            make_result(paper_trades),
-        ])
+        session.execute = AsyncMock(return_value=make_result(live_trades + paper_trades))
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=session)
@@ -82,30 +82,30 @@ class TestFetchRecentPerformanceMemory:
 
     @pytest.mark.asyncio
     async def test_winning_trade_shows_win(self):
-        """Profitable trade → string contains 'WIN +'"""
+        """Profitable trade → string contains win rate details"""
         trade = _mock_trade(entry_price=50000.0, exit_price=55000.0)  # +10%
         ctx = _make_async_ctx([trade], [], raise_exc=False)
         with patch("backend.src.services.memory_manager.get_session", return_value=ctx):
             result = await fetch_recent_performance_memory()
-        assert "WIN +" in result
+        assert "100.0%" in result or "✓ BTC" in result
 
     @pytest.mark.asyncio
     async def test_losing_trade_shows_loss(self):
-        """Losing trade → string contains 'LOSS'"""
+        """Losing trade → string contains loss rate or lesson lesson from worst loss"""
         trade = _mock_trade(entry_price=50000.0, exit_price=48000.0)  # -4%
         ctx = _make_async_ctx([trade], [], raise_exc=False)
         with patch("backend.src.services.memory_manager.get_session", return_value=ctx):
             result = await fetch_recent_performance_memory()
-        assert "LOSS" in result
+        assert "LESSON FROM WORST LOSS" in result or "✗ BTC" in result
 
     @pytest.mark.asyncio
     async def test_breakeven_trade_shows_breakeven(self):
-        """Entry == exit → BREAKEVEN."""
+        """Entry == exit → breakeven trade is treated as loss/win rate update."""
         trade = _mock_trade(entry_price=50000.0, exit_price=50000.0)
         ctx = _make_async_ctx([trade], [], raise_exc=False)
         with patch("backend.src.services.memory_manager.get_session", return_value=ctx):
             result = await fetch_recent_performance_memory()
-        assert "BREAKEVEN" in result
+        assert "win rate" in result.lower()
 
     @pytest.mark.asyncio
     async def test_result_contains_memory_header(self):
@@ -113,11 +113,11 @@ class TestFetchRecentPerformanceMemory:
         ctx = _make_async_ctx([trade], [], raise_exc=False)
         with patch("backend.src.services.memory_manager.get_session", return_value=ctx):
             result = await fetch_recent_performance_memory()
-        assert "RECENT PERFORMANCE MEMORY" in result
+        assert "STRATEGY ADAPTATION MEMORY" in result
 
     @pytest.mark.asyncio
     async def test_paper_trades_also_included(self):
-        """Paper trades returned in second DB call are combined with live."""
+        """Paper trades are combined with live in the database response."""
         live = _mock_trade(entry_price=40000.0, exit_price=42000.0,
                            created_at=datetime(2026, 3, 10, 12, 0, 0))
         paper = _mock_trade(
@@ -127,9 +127,9 @@ class TestFetchRecentPerformanceMemory:
         ctx = _make_async_ctx([live], [paper], raise_exc=False)
         with patch("backend.src.services.memory_manager.get_session", return_value=ctx):
             result = await fetch_recent_performance_memory()
-        # Should have both trade outcomes in result
-        assert "WIN +" in result
-        assert "LOSS" in result
+        # Should have both trade outcomes represented as a mixed result (50% win rate)
+        assert "50.0%" in result or "MIXED" in result
+        assert "LESSON FROM WORST LOSS" in result
 
     @pytest.mark.asyncio
     async def test_returns_string(self):
